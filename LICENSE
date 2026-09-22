@@ -1,21 +1,31 @@
-MIT License
+Wallet Radar — Proprietary Software License
+Copyright (c) 2026 Vitalii Vedana. All Rights Reserved.
 
-Copyright (c) 2026 Vitalii-Vedana
+This software, including its source code, design, algorithms, and
+documentation ("the Software"), is proprietary and confidential.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. GRANT. No license or right is granted except by explicit written
+   agreement with the copyright holder.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. RESTRICTIONS. Without prior written permission you may NOT:
+   copy, distribute, sublicense, sell, modify, reverse-engineer, or
+   create derivative works of the Software, in whole or in part.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+3. NO WARRANTY. The Software is provided "AS IS", without warranty of
+   any kind, express or implied, including but not limited to the
+   warranties of merchantability, fitness for a particular purpose and
+   non-infringement.
+
+4. LIMITATION OF LIABILITY. In no event shall the authors or copyright
+   holders be liable for any claim, damages or other liability arising
+   from, out of or in connection with the Software or its use.
+
+5. NOT FINANCIAL ADVICE. The Software provides analytical information
+   for research purposes only. It does not constitute financial,
+   investment, legal or tax advice. Users act on their own risk.
+
+6. DATA. The Software processes only PUBLIC on-chain (blockchain) data.
+   It never requests, stores or transmits private keys or custody of
+   any funds.
+
+For licensing inquiries, contact the copyright holder.
