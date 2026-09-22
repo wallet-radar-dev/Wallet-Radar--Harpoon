@@ -1,0 +1,28 @@
+[Unit]
+Description=Wallet Radar — multi-chain wallet tracker (Node backend + workers)
+Documentation=https://127.0.0.1:3030/vitalii/wallet-tracker
+# Воркери на старті одразу лізуть у мережу (CoinGecko, Blockscout, DefiLlama), тож чекаємо
+# не просто підняття мережевого стеку, а реальної готовності маршрутів.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wallet-tracker
+# `import "dotenv/config"` у server/index.js читає .env ВІДНОСНО робочого каталогу —
+# без WorkingDirectory вище сервіс піднявся б без APP_PASSWORD, SENTRY_DSN і ключів API.
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+
+# Воркери пишуть у dataset/*.json під час роботи; SIGTERM дає їм дописати файл, а не
+# лишити його обрізаним на пів-JSON (store/backup роблять синхронний writeFileSync).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wallet-radar
+
+[Install]
+WantedBy=multi-user.target

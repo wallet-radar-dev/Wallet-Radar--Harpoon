@@ -1,0 +1,8 @@
+[Unit]
+Description=Wallet Radar analytics refresh (families/emission/rotation from backfill)
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/bash /opt/wallet-tracker/features/refresh-analytics.sh
+StandardOutput=append:/opt/wallet-tracker/dataset/analytics-refresh.log
+StandardError=append:/opt/wallet-tracker/dataset/analytics-refresh.log

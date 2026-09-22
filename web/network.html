@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whale Network Intelligence</title>
+<style>
+  :root{
+    --bg:#090c12;--panel:#0f141d;--panel2:#141a25;--line:#1f2736;--text:#cdd7e6;--muted:#727d90;--dim:#495162;
+    --otc:#fff;--exch:#ff4d5e;--mega:#f4c744;--c359:#ff9d3c;--tok:#3fd0c9;--air:#5ce08a;--other:#4f7fd6;--pos:#4ade80;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;--sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:radial-gradient(1200px 700px at 78% -10%,#12233d 0%,#0a0f18 46%,var(--bg) 100%);color:var(--text);
+    font-family:var(--mono);font-size:13px;min-height:100vh;padding:0 0 60px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+  header{padding:26px 0 16px;border-bottom:1px solid var(--line);margin-bottom:22px}
+  h1{font-family:var(--sans);font-size:24px;font-weight:800;letter-spacing:-.02em;color:#fff}
+  header .sub{color:var(--muted);font-size:12px;margin-top:4px}
+  header .sub a{color:var(--tok);text-decoration:none}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:22px 0}
+  .card{border:1px solid var(--line);border-radius:11px;background:linear-gradient(180deg,var(--panel2),var(--panel));padding:14px 16px}
+  .card .v{font-size:24px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;line-height:1}
+  .card .k{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+  .card.mega .v{color:var(--mega)} .card.exch .v{color:var(--exch)} .card.share .v{color:var(--tok)} .card.pos .v{color:var(--pos)}
+  section{margin:30px 0}
+  h2{font-family:var(--sans);font-size:15px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  h2 .tag{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;
+    padding:2px 8px;border:1px solid var(--line);border-radius:20px}
+  .lead{color:var(--muted);font-size:12px;line-height:1.6;margin-bottom:14px;max-width:80ch}
+  .lead b{color:var(--text)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line)}
+  th{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  td{font-variant-numeric:tabular-nums}
+  td.num,th.num{text-align:right}
+  tr:hover td{background:rgba(90,150,220,.04)}
+  .chip{display:inline-block;padding:1px 8px;border-radius:20px;font-size:10.5px;font-weight:600}
+  .chip.air{background:rgba(92,224,138,.14);color:var(--air)}
+  .chip.tok{background:rgba(63,208,201,.14);color:var(--tok)}
+  .chip.mw{background:rgba(244,199,68,.14);color:var(--mega)}
+  .chip.other{background:rgba(79,127,214,.14);color:var(--other)}
+  .bar{height:7px;border-radius:5px;background:rgba(255,255,255,.06);overflow:hidden;min-width:60px}
+  .bar>span{display:block;height:100%;border-radius:5px}
+  .eth{color:var(--mega);font-weight:700}
+  .neg{color:var(--exch)}
+  .lbl{color:var(--mega);font-weight:600}
+  .graphbox{position:relative;height:560px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#080b11}
+  canvas{display:block;width:100%;height:100%;cursor:grab}
+  canvas:active{cursor:grabbing}
+  .glegend{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;gap:5px;padding:10px 12px;
+    border:1px solid var(--line);border-radius:9px;background:rgba(12,17,26,.86);font-size:11px}
+  .glegend .row{display:flex;align-items:center;gap:8px}
+  .dot{width:10px;height:10px;border-radius:50%;box-shadow:0 0 6px currentColor}
+  .sq{width:9px;height:9px;transform:rotate(45deg);box-shadow:0 0 6px currentColor}
+  .ring{width:10px;height:10px;border-radius:50%;background:transparent;box-shadow:0 0 0 1.5px #fff inset,0 0 5px #fff}
+  .ghint{position:absolute;right:12px;top:10px;font-size:10.5px;color:var(--dim)}
+  .tip{position:absolute;z-index:9;pointer-events:none;display:none;max-width:280px;padding:8px 10px;border:1px solid var(--line);
+    border-radius:8px;background:#0c111a;box-shadow:0 8px 26px rgba(0,0,0,.5);font-size:11px;line-height:1.5}
+  .tip .a{color:#9fb3cc;word-break:break-all;font-size:10px}
+  .err{color:var(--exch);padding:20px;border:1px solid rgba(255,77,94,.3);border-radius:10px;background:rgba(255,77,94,.06)}
+  .muted{color:var(--muted)}
+  footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:10.5px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Whale Network Intelligence</h1>
+    <div class="sub">Координована ETH-мета-мережа · дані з прод-API · <a href="/">← до основного додатку</a></div>
+  </header>
+  <div id="root"><p class="muted" style="padding:40px 0">Завантаження даних із прод-API…</p></div>
+  <footer id="foot"></footer>
+</div>
+<script>
+const F=v=>v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':Math.round(v);
+const short=a=>a?a.slice(0,6)+'…'+a.slice(-4):'';
+const esc=s=>String(s).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+async function j(u){const r=await fetch(u,{headers:{'Accept':'application/json'}});if(!r.ok)throw new Error(u+' → '+r.status);return r.json();}
+
+(async function(){
+  const root=document.getElementById('root');
+  let U,C,M,L,D,M2;
+  try{ [U,C,M,L,D,M2]=await Promise.all([
+    j('/api/universe-groups'),j('/api/cohort-analysis'),j('/api/desk-master-graph'),j('/api/network-labels'),j('/api/desk-linked-network'),j('/api/meta-subnets')]);
+  }catch(e){ root.innerHTML='<div class="err">Не вдалося завантажити дані: '+esc(e.message)+'<br>Перевір, що прод-сервер піднятий і ти авторизований.</div>'; return; }
+
+  const counts=M.counts||{};
+  const shared=(M.nodes||[]).filter(n=>(n.src&1)&&(n.src&2)).length;
+  const internalCirc=(M.edges||[]).reduce((s,e)=>s+(e[3]?0:e[2]),0);
+  const leakPct=(100*(counts.total_leak||0)/((counts.total_leak||0)+internalCirc)||0).toFixed(0);
+  const arche=(U.archetypes||[]).slice().sort((a,b)=>(b.size)-(a.size));
+  const mega=arche.reduce((m,a)=>a.avg_eth>m.avg_eth?a:m,{avg_eth:-1e9});
+  const megaTotal=arche.reduce((s,a)=>s+Math.max(0,a.size*a.avg_eth),0);
+  const comms=(U.communities||[]).filter(c=>c.size>=4);
+  const THEME={0:['airdrop-фарм','air'],1:['airdrop-фарм','air'],2:['токенізовані акції','tok']};
+
+  // cash-out: exchange nodes w/ leak, labeled
+  const sinks=(M.nodes||[]).filter(n=>n.role==='exchange'&&n.leak).sort((a,b)=>b.leak-a.leak).slice(0,10);
+  const maxLeak=sinks.length?sinks[0].leak:1;
+
+  let h='';
+  // cards
+  h+='<div class="cards">'+
+    card(F(counts.total_nodes||0),'вузлів мережі')+
+    card(F(shared),'спільних (desk∩C6)','share')+
+    card(F(megaTotal),'ETH у мега-китах','mega')+
+    card(F(counts.total_leak||0),'ETH → біржі','exch')+
+    card(leakPct+'%','кеш-аут (leak)')+
+  '</div>';
+
+  // institutional cash-out
+  h+='<section><h2>Точки кешування <span class="tag">інституційні мітки</span></h2>'+
+    '<p class="lead">~80% ETH циркулює всередині кластера через OTC-дески; назовні виходить точково. Мітки — публічні Etherscan name tags.</p>'+
+    '<table><thead><tr><th>Майданчик</th><th>Адреса</th><th class="num">ETH виведено</th><th>частка</th></tr></thead><tbody>';
+  for(const s of sinks){ h+='<tr><td class="lbl">'+esc(s.label||'біржа')+'</td><td class="muted">'+short(s.id)+'</td>'+
+    '<td class="num eth">'+F(s.leak)+'</td><td><div class="bar"><span style="width:'+(100*s.leak/maxLeak).toFixed(0)+'%;background:var(--exch)"></span></div></td></tr>'; }
+  h+='</tbody></table>';
+  // OTC hubs
+  const otc=Object.entries(L.hubs_otc||{});
+  if(otc.length){ h+='<p class="lead" style="margin-top:14px"><b>OTC-хаби-перерозподільники:</b> '+
+    otc.map(([a,n])=>'<span class="lbl">'+esc(n)+'</span> <span class="muted">('+short(a)+')</span>').join(' · ')+'</p>'; }
+  h+='</section>';
+
+  // universe archetypes
+  const maxSz=Math.max(...arche.map(a=>a.size));
+  h+='<section><h2>Поведінкові архетипи <span class="tag">'+(U.band||0)+' активних гаманців</span></h2>'+
+    '<p class="lead">Кластеризація всіх активних гаманців (≥5 реальних-токен транзакцій) за поведінкою. <b>Гроші сконцентровані у мега-китах</b>; координація — в малих DePIN/CRO-групах.</p>'+
+    '<table><thead><tr><th>Архетип</th><th class="num">n</th><th class="num">сер. ETH</th><th class="num">всього ETH</th><th class="num">DePIN</th><th>топ-токени</th></tr></thead><tbody>';
+  for(const a of arche){ const tot=a.size*a.avg_eth; const isMega=a===mega;
+    h+='<tr><td>'+(isMega?'<span class="chip mw">мега-кити</span>':'C'+a.c)+'</td>'+
+    '<td class="num"><div class="bar" style="display:inline-block;width:'+(60*a.size/maxSz+8)+'px"><span style="width:100%;background:'+(isMega?'var(--mega)':'var(--other)')+'"></span></div> '+a.size+'</td>'+
+    '<td class="num '+(a.avg_eth<0?'neg':'')+'">'+F(a.avg_eth)+'</td>'+
+    '<td class="num '+(tot<0?'neg':'eth')+'">'+F(tot)+'</td>'+
+    '<td class="num">'+(a.depin_share||0)+'%</td>'+
+    '<td class="muted">'+esc((a.top_symbols||[]).slice(0,5).join(' '))+'</td></tr>'; }
+  h+='</tbody></table></section>';
+
+  // coordinated groups
+  h+='<section><h2>Координовані групи <span class="tag">shared-token дески</span></h2>'+
+    '<p class="lead">Гаманці, що синхронно тримають однаковий кошик рідкісних токенів — ознака одного оператора. Теми названо за складом портфеля.</p>'+
+    '<table><thead><tr><th>Група</th><th>Тема</th><th class="num">гаманців</th><th class="num">сер. ETH</th><th>спільні токени</th></tr></thead><tbody>';
+  for(const c of comms){ const t=THEME[c.k]||['координований деск','other'];
+    h+='<tr><td>K'+c.k+'</td><td><span class="chip '+t[1]+'">'+t[0]+'</span></td>'+
+    '<td class="num">'+c.size+'</td><td class="num eth">'+F(c.avg_eth)+'</td>'+
+    '<td class="muted">'+esc((c.shared_tokens||[]).slice(0,7).map(s=>s.split(':')[0]).join(' '))+'</td></tr>'; }
+  h+='</tbody></table></section>';
+
+  // meta-network sub-desks
+  const msub=(M2&&M2.communities||[]).filter(c=>c.size>=3);
+  if(msub.length){
+    const mtheme=toks=>{const s=(toks||[]).map(x=>String(x).split(':')[0]).join(' ');
+      if(/\b(grail|dpx|jones|stg|psi)\b/.test(s))return['Arbitrum-DeFi','tok'];
+      if(/\b(olas|anyone|gel|asm|cweb|ol)\b/.test(s))return['DePIN / AI-агенти','air'];
+      if(/\b(almanak|sapien|corn|edge|soso|nex|rbc)\b/.test(s))return['airdrop-фарм (кити)','air'];
+      if(/variabledebt|aeth|ausdc/.test(s))return['Aave-леверидж','mw'];
+      return['координований деск','other'];};
+    h+='<section><h2>Сабмережі мета-кластера <span class="tag">пошук по 2344 членах</span></h2>'+
+      '<p class="lead">Окремі тематичні дески <b>всередині</b> об\'єднаної мета-мережі (окрім засіяних desk/мега-кити/airdrop). Тема — за спільним кошиком рідкісних токенів.</p>'+
+      '<table><thead><tr><th>Деск</th><th>Тема</th><th class="num">гаманців</th><th class="num">сер. ETH</th><th>спільні токени</th></tr></thead><tbody>';
+    for(const c of msub){const t=mtheme(c.shared_tokens);
+      h+='<tr><td>M'+c.k+'</td><td><span class="chip '+t[1]+'">'+t[0]+'</span></td>'+
+      '<td class="num">'+c.size+'</td><td class="num eth">'+F(c.avg_eth)+'</td>'+
+      '<td class="muted">'+esc((c.shared_tokens||[]).slice(0,8).map(x=>String(x).split(':')[0]).join(' '))+'</td></tr>';}
+    h+='</tbody></table></section>';
+  }
+
+  // graph
+  h+='<section><h2>Граф мета-мережі <span class="tag">'+F(counts.graph_nodes||counts.total_nodes||0)+' вузлів у потоках · '+F(counts.edges_kept||0)+' ребер ≥500 ETH</span></h2>'+
+    '<div class="graphbox"><canvas id="net"></canvas><div class="ghint">перетягуй · зум · наведення</div>'+
+    '<div class="glegend">'+
+      '<div class="row"><span class="ring"></span>OTC-деск</div>'+
+      '<div class="row"><span class="sq" style="color:#ff4d5e;background:#ff4d5e"></span>біржа</div>'+
+      '<div class="row"><span class="dot" style="color:#f4c744;background:#f4c744"></span>мега-кит</div>'+
+      '<div class="row"><span class="dot" style="color:#ff9d3c;background:#ff9d3c"></span>359-когорта</div>'+
+      '<div class="row"><span class="dot" style="color:#3fd0c9;background:#3fd0c9"></span>ток-акції</div>'+
+      '<div class="row"><span class="dot" style="color:#5ce08a;background:#5ce08a"></span>airdrop</div>'+
+      '<div class="row"><span class="dot" style="color:#4f7fd6;background:#4f7fd6"></span>інші</div>'+
+    '</div><div class="tip" id="tip"></div></div></section>';
+
+  root.innerHTML=h;
+  document.getElementById('foot').innerHTML='Джерела: native-ETH краули з 2025-09-01 (Etherscan) · мітки — Etherscan public name tags · '+
+    'ендпоінти: /api/universe-groups /api/desk-master-graph /api/network-labels /api/cohort-analysis /api/desk-linked-network · оновлюється зі свіжими артефактами.';
+  try{ drawGraph(M); }
+  catch(err){ const gb=document.querySelector('.graphbox'); if(gb) gb.innerHTML='<div class="err" style="margin:14px">Граф не намалювався: '+esc(err&&err.message||err)+'</div>'; }
+})();
+
+function card(v,k,cls){return '<div class="card '+(cls||'')+'"><div class="v">'+v+'</div><div class="k">'+k+'</div></div>';}
+function M_circ(M){return (M.nodes||[]).length? 0 : 0;}
+
+function drawGraph(G){
+  const CLS={otc:'#fff',exchange:'#ff4d5e',megawhale:'#f4c744',cohort359:'#ff9d3c',tokstocks:'#3fd0c9',airdrop:'#5ce08a',other:'#4f7fd6'};
+  const cls=n=>n.role==='otc'?'otc':n.role==='exchange'?'exchange':(n.grp||'other');
+  const fmt=v=>v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':Math.round(v);
+  const OTC=new Set(Object.keys((window.__L&&window.__L.hubs_otc)||{}));
+  const nodes=G.nodes.map(n=>({...n,x:0,y:0,vx:0,vy:0,deg:0,r:2})),N=nodes.length;
+  const edges=G.edges.map(([s,d,e,l])=>{nodes[s].deg++;nodes[d].deg++;return{s,d,e,l};});
+  nodes.forEach(n=>{n.r=n.role==='exchange'?3+2.1*Math.log10((n.leak||10)+10):n.role==='otc'?5:1.7+1.4*Math.log10(n.deg*300+10)+(n.grp==='megawhale'?1:0);});
+  nodes.forEach((n,i)=>{const R={otc:.5,megawhale:1.5,cohort359:2.3,tokstocks:3.1,airdrop:3.5,other:2.8,exchange:6}[cls(n)]||3,a=i*2.399963,rad=R*66+(Math.random()*40-20);n.x=Math.cos(a)*rad;n.y=Math.sin(a)*rad;});
+  const cv=document.getElementById('net'),ctx=cv.getContext('2d');let W,H,DPR=Math.min(devicePixelRatio||1,2);const cam={x:0,y:0,k:1};
+  function rs(){const r=cv.getBoundingClientRect();W=r.width;H=r.height;cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);}
+  new ResizeObserver(rs).observe(cv);rs();
+  const sx=n=>(n.x-cam.x)*cam.k+W/2,sy=n=>(n.y-cam.y)*cam.k+H/2;
+  let drag=null,hover=null,pan=null;
+  const SP=.009,RE=32,GR=.02,DP=.86,RR=64,RF=760;let al=1;
+  function step(){const g=new Map(),cs=RR;for(let i=0;i<N;i++){const n=nodes[i],k=Math.floor(n.x/cs)+','+Math.floor(n.y/cs);(g.get(k)||g.set(k,[]).get(k)).push(i);}
+    for(let i=0;i<N;i++){const n=nodes[i],gx=Math.floor(n.x/cs),gy=Math.floor(n.y/cs);for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++){const c=g.get((gx+a)+','+(gy+b));if(!c)continue;for(const jj of c){if(jj<=i)continue;const m=nodes[jj];let dx=n.x-m.x,dy=n.y-m.y,d2=dx*dx+dy*dy;if(d2>RR*RR||!d2)continue;const d=Math.sqrt(d2),f=RF/d2;n.vx+=dx/d*f*al;n.vy+=dy/d*f*al;m.vx-=dx/d*f*al;m.vy-=dy/d*f*al;}}}
+    for(const e of edges){const a=nodes[e.s],b=nodes[e.d];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1,f=SP*(d-RE);a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;}
+    for(const n of nodes){if(n===drag)continue;n.vx-=n.x*GR*al*.02;n.vy-=n.y*GR*al*.02;n.vx*=DP;n.vy*=DP;n.x+=n.vx*al;n.y+=n.vy*al;}if(al>.03)al*=.994;}
+  for(let i=0;i<90;i++)step();
+  {let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const n of nodes){a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x);d=Math.max(d,n.y);}const w=c-a||1,hh=d-b||1;cam.x=(a+c)/2;cam.y=(b+d)/2;cam.k=Math.min(W/(w*1.15),H/(hh*1.15),1.3);}
+  function draw(){ctx.clearRect(0,0,W,H);ctx.lineWidth=1;
+    for(const e of edges){const a=nodes[e.s],b=nodes[e.d];ctx.strokeStyle=e.l?'rgba(255,77,94,.18)':'rgba(88,140,210,.06)';ctx.beginPath();ctx.moveTo(sx(a),sy(a));ctx.lineTo(sx(b),sy(b));ctx.stroke();}
+    for(const n of nodes){const x=sx(n),y=sy(n),r=Math.max(1.2,n.r*Math.sqrt(cam.k)),c=cls(n),col=CLS[c];
+      if(c==='exchange'){ctx.fillStyle=col;ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/4);ctx.shadowColor=col;ctx.shadowBlur=7;ctx.fillRect(-r,-r,r*2,r*2);ctx.restore();}
+      else{ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=c==='megawhale'||c==='otc'?9:4;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();if(c==='otc'){ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,r+2.5,0,7);ctx.stroke();}}}
+    ctx.shadowBlur=0;ctx.font='600 11px '+getComputedStyle(document.body).fontFamily;ctx.textBaseline='middle';
+    for(const n of nodes){if(!n.label)continue;const x=sx(n),y=sy(n),r=Math.max(1.2,n.r*Math.sqrt(cam.k)),tw=ctx.measureText(n.label).width,lx=x+r+5;
+      ctx.fillStyle='rgba(9,12,18,.82)';ctx.fillRect(lx-3,y-8,tw+6,16);ctx.fillStyle=n.role==='exchange'?'#ff9098':(n.role==='otc'?'#fff':'#f4c744');ctx.fillText(n.label,lx,y+1);}
+    if(hover){const x=sx(hover),y=sy(hover),r=Math.max(1.2,hover.r*Math.sqrt(cam.k))+3;ctx.strokeStyle='#fff';ctx.lineWidth=1.4;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.stroke();}}
+  function loop(){step();draw();requestAnimationFrame(loop);}requestAnimationFrame(loop);
+  const NET=['','desk','C6','desk+C6','airdrop','desk+air','C6+air','all'];const tip=document.getElementById('tip');
+  function pick(px,py){let bb=null,bd=1e9;for(const n of nodes){const dx=sx(n)-px,dy=sy(n)-py,d=dx*dx+dy*dy,rr=Math.max(3,n.r*Math.sqrt(cam.k))+4;if(d<rr*rr&&d<bd){bd=d;bb=n;}}return bb;}
+  cv.addEventListener('pointerdown',e=>{const n=pick(e.offsetX,e.offsetY);if(n){drag=n;al=Math.max(al,.35);}else pan={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y};cv.setPointerCapture(e.pointerId);});
+  cv.addEventListener('pointermove',e=>{const px=e.offsetX,py=e.offsetY;if(drag){drag.x=(px-W/2)/cam.k+cam.x;drag.y=(py-H/2)/cam.k+cam.y;drag.vx=drag.vy=0;return;}if(pan){cam.x=pan.cx-(e.clientX-pan.x)/cam.k;cam.y=pan.cy-(e.clientY-pan.y)/cam.k;return;}
+    const n=pick(px,py);hover=n;if(n){tip.style.display='block';const c=cls(n);tip.innerHTML='<div class="a">'+n.id+'</div><div style="color:'+CLS[c]+';font-weight:700">'+(n.label?n.label+' · ':'')+c+'</div><div class="muted">мережі '+(NET[n.src]||n.src)+' · degree '+n.deg+(n.leak?' · leak '+fmt(n.leak)+' ETH':'')+'</div>';
+      const b=cv.getBoundingClientRect();tip.style.left=Math.min(px+14,b.width-286)+'px';tip.style.top=Math.min(py+14,b.height-70)+'px';}else tip.style.display='none';});
+  function end(e){drag=null;pan=null;try{cv.releasePointerCapture(e.pointerId)}catch(_){}}
+  cv.addEventListener('pointerup',end);cv.addEventListener('pointerleave',()=>{hover=null;tip.style.display='none';});
+  cv.addEventListener('wheel',e=>{e.preventDefault();const px=e.offsetX,py=e.offsetY,wx=(px-W/2)/cam.k+cam.x,wy=(py-H/2)/cam.k+cam.y;cam.k*=Math.exp(-e.deltaY*.0012);cam.k=Math.max(.1,Math.min(6,cam.k));cam.x=wx-(px-W/2)/cam.k;cam.y=wy-(py-H/2)/cam.k;},{passive:false});
+}
+</script>
+</body>
+</html>

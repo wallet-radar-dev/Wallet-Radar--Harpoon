@@ -1,0 +1,29 @@
+{
+  "name": "wallet-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wallet Radar — multi-chain wallet tracker (frontend + backend)",
+  "scripts": {
+    "build": "npm run typecheck && npm run build:js && npm run build:css && node scripts/stamp-assets.mjs",
+    "start": "node server/index.js",
+    "serve": "node server/index.js",
+    "test": "DATASET_DIR=$(node tools/test-sandbox.mjs) DATA_DIR=$(mktemp -d) node --test",
+    "build:css": "npx --yes tailwindcss@3 -c tailwind.config.cjs -i web/tw-input.css -o web/app.css --minify",
+    "build:js": "npx --yes esbuild@0.24 web/src/main.ts --bundle --sourcemap --target=es2020 --format=iife --platform=browser --outfile=web/app.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sentry/node": "^8",
+    "dotenv": "^16",
+    "express": "^4",
+    "js-sha3": "^0.8.0",
+    "moralis": "^2.27.2",
+    "ws": "^8"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "tailwindcss": "^3.4.19",
+    "esbuild": "^0.24.0"
+  }
+}

@@ -1,0 +1,68 @@
+# Симуляція «кор VM ↔ сателіт VM» на контейнерах.
+#
+# Два сателіти в окремій мережі. Кор (systemd-сервіс на хості) ходить до них по gRPC поверх
+# mTLS на 127.0.0.1:8443 / :8444.
+#
+# УВАГА, головне про сенс: ліміт Etherscan рахується НА АКАУНТ (сервер каже це дослівно:
+# "Max calls per sec rate limit reached (3/sec)"), а один акаунт дає щонайбільше 3 ключі, і всі
+# вони ділять ті самі 3 запити/с. Тому ДРУГИЙ КЛЮЧ ІЗ ТОГО САМОГО АКАУНТА КВОТИ НЕ ДОДАЄ.
+#
+# Звідси SATELLITE_QUOTA_SHARE=2: обидва сателіти ділять один акаунт, тож кожен мусить гнати
+# ВДВІЧІ повільніше — інакше разом вони видають 6/с проти дозволених 3/с, і провайдер відхиляє
+# майже половину (так і було: ~45% викликів поверталися NOTOK, кор мовчки їх повторював).
+#
+# Коли в сателітів з'являться ключі РІЗНИХ акаунтів — поставте 1: квоти стануть незалежними, і
+# ось тоді throughput справді подвоїться.
+services:
+  satellite-a:
+    build:
+      context: ..
+      dockerfile: deploy/satellite/Dockerfile
+    container_name: satellite-a
+    environment:
+      SATELLITE_ID: satellite-a
+      SATELLITE_ADDR: 0.0.0.0:8443
+      PKI_DIR: /pki
+      RUST_LOG: info
+      # Скільки сателітів ділять ОДИН акаунт провайдера. Зараз ключі спільні → 2.
+      SATELLITE_QUOTA_SHARE: "2"
+      ETHERSCAN_API_KEY: ${SAT_A_ETHERSCAN_API_KEY:-}
+      MORALIS_API_KEY: ${SAT_A_MORALIS_API_KEY:-}
+      LUNARCRUSH_API_KEY: ${SAT_A_LUNARCRUSH_API_KEY:-}
+      ARKHAM_API_KEY: ${SAT_A_ARKHAM_API_KEY:-}
+      GLASSNODE_API_KEY: ${SAT_A_GLASSNODE_API_KEY:-}
+    volumes:
+      # Тільки читання: сателіту нема чого писати у свою PKI.
+      - ./pki/out:/pki:ro
+    ports:
+      - "127.0.0.1:8443:8443"
+    networks: [orbit]
+    restart: unless-stopped
+
+  satellite-b:
+    build:
+      context: ..
+      dockerfile: deploy/satellite/Dockerfile
+    container_name: satellite-b
+    environment:
+      SATELLITE_ID: satellite-b
+      SATELLITE_ADDR: 0.0.0.0:8443
+      PKI_DIR: /pki
+      RUST_LOG: info
+      # Скільки сателітів ділять ОДИН акаунт провайдера. Зараз ключі спільні → 2.
+      SATELLITE_QUOTA_SHARE: "2"
+      ETHERSCAN_API_KEY: ${SAT_B_ETHERSCAN_API_KEY:-}
+      MORALIS_API_KEY: ${SAT_B_MORALIS_API_KEY:-}
+      LUNARCRUSH_API_KEY: ${SAT_B_LUNARCRUSH_API_KEY:-}
+      ARKHAM_API_KEY: ${SAT_B_ARKHAM_API_KEY:-}
+      GLASSNODE_API_KEY: ${SAT_B_GLASSNODE_API_KEY:-}
+    volumes:
+      - ./pki/out:/pki:ro
+    ports:
+      - "127.0.0.1:8444:8443"
+    networks: [orbit]
+    restart: unless-stopped
+
+networks:
+  orbit:
+    driver: bridge

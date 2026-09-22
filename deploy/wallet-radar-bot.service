@@ -1,0 +1,18 @@
+[Unit]
+Description=Wallet Radar — Telegram-бот команд (botd)
+Documentation=file:///opt/wallet-tracker/backfill/src/botd.rs
+After=network-online.target wallet-radar-rust.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/wallet-tracker
+ExecStart=/opt/wallet-tracker/backfill/target/release/botd /opt/wallet-tracker
+# Демон має пережити перезапуск роутера й тимчасову відмову Telegram:
+# власний відступ усередині, systemd підстраховує на випадок падіння процесу.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

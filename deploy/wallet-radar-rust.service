@@ -1,0 +1,80 @@
+[Unit]
+Description=Wallet Radar — Rust backend + всі 20 фонових воркерів
+Documentation=https://127.0.0.1:3030/vitalii/wallet-tracker
+After=network-online.target
+Wants=network-online.target
+
+# Сателіти живуть у docker. У СУВОРОМУ режимі (SATELLITE_ENDPOINTS нижче) кор без них не має
+# доступу до Etherscan/Moralis/LunarCrush ВЗАГАЛІ, тож стартувати раніше за docker означає
+# вікно, у якому keyed-джерела мовчать. Канал відновиться сам (gRPC-канал лінивий і
+# перепідключається), але воркери за цей час встигнуть відпрацювати цикл «даних немає».
+After=docker.service
+Wants=docker.service
+
+# ВЗАЄМНО ВИКЛЮЧНІ з Node-версією. Обидва сервери пишуть в ОДИН dataset/*.json і в
+# server/data.json; запущені разом вони затирають файли один одного (і шлють подвійні
+# алерти в Telegram). systemd зупинить wallet-radar.service, коли стартує цей.
+Conflicts=wallet-radar.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wallet-tracker
+ExecStart=/opt/wallet-tracker/rust-server/target/release/rust-server
+
+# APP_ROOT обов'язковий і НЕ дорівнює WorkingDirectory: бінарник за замовчуванням бере
+# ".." (він розрахований на запуск із rust-server/). Без цього рядка сервер читав би
+# /opt/dataset — тобто нічого, і мовчки віддавав би порожні відповіді.
+Environment=APP_ROOT=/opt/wallet-tracker
+# .env читається З APP_ROOT (dotenvy::from_path) і НЕ перекриває змінні, задані тут,
+# тож ENABLE_* нижче мають пріоритет над файлом.
+Environment=RUST_PORT=3000
+
+# ── Сателіти (див. docs/satellites.md). Розкоментувати, коли вони підняті. ──
+# Це СУВОРИЙ вимикач: щойно SATELLITE_ENDPOINTS заданий, кор більше НЕ ходить у
+# Etherscan/Moralis/LunarCrush напряму — навіть якщо ключі лишилися в його .env. Тому вмикати
+# треба свідомо й тільки після `rust-server --probe-satellites`: якщо сателіти лежать, keyed-
+# джерела мовчатимуть, і це виглядатиме як «дані закінчилися», а не як збій транспорту.
+Environment=SATELLITE_ENDPOINTS=satellite-a=https://127.0.0.1:8443,satellite-b=https://127.0.0.1:8444
+Environment=PKI_DIR=/opt/wallet-tracker/deploy/pki/out
+
+# ── Воркери. За замовчуванням у коді всі OFF — саме щоб Rust не писав у спільний
+# датасет, поки ним володіє Node. Тут Rust стає ЄДИНИМ сервером, тож вмикаємо всі. ──
+# Стрічка подій і моніторинг
+Environment=ENABLE_FEED_WORKER=1
+Environment=ENABLE_BEHAVIOR_WORKER=1
+# Координація капіталу (ядро продукту)
+Environment=ENABLE_FORENSICS_WORKER=1
+Environment=ENABLE_CONDUCTORS_WORKER=1
+Environment=ENABLE_CONDUCTOR_MONITOR_WORKER=1
+Environment=ENABLE_ACTIVE_GROUPS_WORKER=1
+Environment=ENABLE_COORD_MOVES_WORKER=1
+Environment=ENABLE_WHALE_FINDER_WORKER=1
+Environment=ENABLE_EXPAND_WORKER=1
+# Активи, стратегія, аналітика
+Environment=ENABLE_WALLET_SCAN_WORKER=1
+# Кеш балансів (dataset/wallet-balances.json). Без нього фронт добуває баланси по одному
+# живими обходами 15 мереж, і «Сумарна вартість» по всіх гаманцях не рахується взагалі.
+Environment=ENABLE_BALANCES_WORKER=1
+Environment=ENABLE_UNIVERSE_WORKER=1
+Environment=ENABLE_PHASES_WORKER=1
+Environment=ENABLE_BACKTEST_WORKER=1
+Environment=ENABLE_ML_WORKER=1
+# Обслуговування
+Environment=ENABLE_LABELS_WORKER=1
+Environment=ENABLE_MARKET_WORKER=1
+Environment=ENABLE_BACKUP_WORKER=1
+
+Restart=always
+RestartSec=5
+
+# Воркери пишуть у dataset/*.json під час роботи; SIGTERM дає їм дописати файл, а не
+# лишити його обрізаним на пів-JSON.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wallet-radar-rust
+
+[Install]
+WantedBy=multi-user.target

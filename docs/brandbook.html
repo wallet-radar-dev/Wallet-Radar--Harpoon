@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wallet Radar — Брендбук</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#080B14; --bg2:#0C1220; --surface:#0E1626;
+  --line:#24314F; --line2:#18213A;
+  --ink:#EAF0FB; --mut:#8A97B4; --dim:#5C6B8C;
+  --acc:#4C8DFF;      /* Signal Blue  */
+  --acc2:#37E0C8;     /* Radar Teal   */
+  --amb:#FBBF24;      /* Alert Amber  */
+  --up:#22C55E;       /* Accumulation */
+  --down:#EF4444;     /* Distribution */
+  --grad:linear-gradient(94deg,var(--acc),var(--acc2));
+  --mono:"SF Mono",ui-monospace,"Cascadia Code",Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,"Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:var(--sans);
+  background:
+    radial-gradient(1200px 700px at 82% -8%,rgba(76,141,255,.16),transparent 60%),
+    radial-gradient(900px 620px at 2% 6%,rgba(55,224,200,.09),transparent 55%),
+    var(--bg);
+  color:var(--ink);
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+h1,h2,h3{margin:0;letter-spacing:-.02em;text-wrap:balance}
+p{margin:0}
+a{color:var(--acc);text-decoration:none}
+a:focus-visible,button:focus-visible{outline:2px solid var(--acc2);outline-offset:3px;border-radius:4px}
+
+/* ── shared label ── */
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--acc2)}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--acc)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ── section frame ── */
+section{padding:66px 0;border-top:1px solid var(--line2)}
+.sec-head{display:flex;flex-direction:column;gap:12px;margin-bottom:34px;max-width:64ch}
+.sec-head h2{font-size:clamp(26px,4.2vw,40px);font-weight:760;line-height:1.05}
+.sec-head p{color:var(--mut);font-size:16px}
+.sec-num{font-family:var(--mono);font-size:12px;color:var(--dim);letter-spacing:.2em}
+
+/* ── hero / radar ── */
+.hero{display:grid;grid-template-columns:1.15fr .85fr;gap:40px;align-items:center;
+  padding:78px 0 66px;border-top:none}
+.hero .lede{color:var(--mut);font-size:clamp(16px,2.2vw,20px);max-width:52ch;margin-top:22px}
+.wordmark{display:flex;align-items:center;gap:16px;margin-top:22px}
+.mark{font-size:clamp(40px,7vw,60px);line-height:1;filter:drop-shadow(0 0 18px rgba(76,141,255,.45))}
+.wordmark h1{font-size:clamp(40px,7.6vw,74px);font-weight:820;line-height:.92}
+.wordmark h1 .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
+.chip{border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.03),transparent);
+  border-radius:11px;padding:10px 15px}
+.chip b{display:block;font-family:var(--mono);font-size:20px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.chip span{font-size:11.5px;color:var(--mut);letter-spacing:.03em}
+
+.radar-stage{display:flex;justify-content:center}
+.radar{position:relative;width:min(360px,78vw);aspect-ratio:1;border-radius:50%;
+  background:radial-gradient(circle at 50% 50%,rgba(55,224,200,.06),transparent 68%);
+  border:1px solid var(--line);overflow:hidden;box-shadow:0 0 0 1px rgba(76,141,255,.05),0 40px 80px -40px #000}
+.radar .grid{position:absolute;inset:0;border-radius:50%;
+  background:
+    repeating-radial-gradient(circle at 50% 50%,transparent 0 39px,rgba(76,141,255,.13) 39px 40px),
+    linear-gradient(var(--line2),var(--line2)) center/1px 100% no-repeat,
+    linear-gradient(var(--line2),var(--line2)) center/100% 1px no-repeat}
+.radar .sweep{position:absolute;inset:0;border-radius:50%;mix-blend-mode:screen;
+  background:conic-gradient(from 0deg,rgba(55,224,200,.42),rgba(55,224,200,.04) 44deg,transparent 120deg 360deg);
+  animation:spin 4.4s linear infinite}
+.radar .core{position:absolute;top:50%;left:50%;width:9px;height:9px;margin:-4.5px;border-radius:50%;
+  background:var(--acc2);box-shadow:0 0 14px var(--acc2)}
+.blip{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--acc);
+  box-shadow:0 0 12px var(--acc);opacity:0;animation:blip 4.4s ease-out infinite}
+.blip.b1{top:30%;left:64%;animation-delay:.5s}
+.blip.b2{top:63%;left:38%;animation-delay:1.9s;background:var(--acc2);box-shadow:0 0 12px var(--acc2)}
+.blip.b3{top:44%;left:24%;animation-delay:3.1s}
+.blip.b4{top:72%;left:70%;animation-delay:2.5s;background:var(--amb);box-shadow:0 0 12px var(--amb)}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blip{0%{opacity:0;transform:scale(.4)}8%{opacity:1;transform:scale(1)}55%{opacity:.7}100%{opacity:0;transform:scale(1.5)}}
+@media(prefers-reduced-motion:reduce){.radar .sweep{animation:none;opacity:.5}.blip{animation:none;opacity:.9}}
+
+/* ── logo section ── */
+.logo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.plate{border:1px solid var(--line);border-radius:14px;padding:26px;background:var(--bg2);
+  display:flex;flex-direction:column;gap:14px;min-height:150px}
+.plate .cap{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.lockup{display:flex;align-items:center;gap:12px}
+.lockup .m{font-size:34px;line-height:1;filter:drop-shadow(0 0 12px rgba(76,141,255,.4))}
+.lockup .w{font-size:26px;font-weight:800}
+.lockup .w .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.clearspace{position:relative;align-self:flex-start;padding:16px;border:1px dashed var(--line);border-radius:10px}
+.misuse{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:22px}
+.mis{border:1px solid var(--line2);border-radius:12px;padding:16px;display:flex;gap:12px;align-items:flex-start;background:var(--bg2)}
+.mis .x{font-family:var(--mono);font-weight:800;color:var(--down)}
+.mis .ok{font-family:var(--mono);font-weight:800;color:var(--up)}
+.mis p{font-size:13.5px;color:var(--mut)}
+.mis .w2{font-size:19px;font-weight:800}
+
+/* ── color ── */
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.sw{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--bg2)}
+.sw .cap-chip{height:92px;display:flex;align-items:flex-end;padding:12px}
+.sw .cap-chip .role{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  padding:3px 8px;border-radius:6px;background:rgba(8,11,20,.55);backdrop-filter:blur(2px)}
+.sw .meta{padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.sw .name{font-size:13.5px;font-weight:650}
+.sw .hex{font-family:var(--mono);font-size:12px;color:var(--mut);text-transform:uppercase}
+.sw .use{font-size:12px;color:var(--dim);margin-top:2px;line-height:1.4}
+.gradbar{margin-top:16px;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--bg2)}
+.gradbar .band{height:66px;background:var(--grad)}
+.gradbar .meta{padding:12px 16px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.gradbar .meta .hex{font-family:var(--mono);font-size:12px;color:var(--mut)}
+
+/* ── typography ── */
+.type-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:26px}
+.type-card{border:1px solid var(--line);border-radius:14px;padding:24px;background:var(--bg2)}
+.type-card .big{font-size:46px;font-weight:800;line-height:1;letter-spacing:-.02em}
+.type-card .big.m{font-family:var(--mono);font-weight:600}
+.type-card .role{margin-top:14px;font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--acc)}
+.type-card .stack{font-family:var(--mono);font-size:12px;color:var(--mut);margin-top:6px}
+.type-card .note{font-size:13.5px;color:var(--mut);margin-top:12px}
+.scale{border:1px solid var(--line);border-radius:14px;background:var(--bg2);overflow:hidden}
+.scale .row{display:flex;align-items:baseline;gap:20px;padding:14px 20px;border-top:1px solid var(--line2)}
+.scale .row:first-child{border-top:none}
+.scale .row .tk{font-family:var(--mono);font-size:11px;color:var(--dim);width:150px;flex:none;letter-spacing:.08em}
+.scale .row .sp{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── voice ── */
+.voice{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.pr{border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg2)}
+.pr .n{font-family:var(--mono);font-size:12px;color:var(--acc2);letter-spacing:.14em}
+.pr h3{font-size:17px;font-weight:720;margin:8px 0 6px}
+.pr p{font-size:14px;color:var(--mut)}
+.dodont{margin-top:16px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg2)}
+.dd{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.dd .col{padding:18px 20px}
+.dd .col+.col{border-left:1px solid var(--line2)}
+.dd .lab{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:12px}
+.dd .lab.y{color:var(--up)}.dd .lab.n{color:var(--down)}
+.dd ul{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+.dd li{font-size:14px;color:var(--ink);padding-left:20px;position:relative}
+.dd li span{color:var(--mut)}
+.dd .y ~ ul li::before,.dd li.y::before{content:"→"}
+.dd li::before{position:absolute;left:0;font-family:var(--mono)}
+.dd .colY li::before{content:"✓";color:var(--up)}
+.dd .colN li::before{content:"✕";color:var(--down)}
+
+/* ── icons / signal ── */
+.icons{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.ico{border:1px solid var(--line);border-radius:14px;padding:20px;background:var(--bg2);text-align:center}
+.ico .e{font-size:34px;line-height:1.2}
+.ico .nm{font-weight:700;font-size:14.5px;margin-top:8px}
+.ico .ds{font-size:12.5px;color:var(--mut);margin-top:4px;line-height:1.45}
+.lights{display:flex;gap:14px;flex-wrap:wrap;margin-top:16px}
+.light{flex:1;min-width:160px;border:1px solid var(--line);border-radius:14px;padding:18px 20px;background:var(--bg2);
+  display:flex;align-items:center;gap:14px}
+.dot{width:16px;height:16px;border-radius:50%;flex:none}
+.light .txt b{display:block;font-size:14.5px}
+.light .txt span{font-size:12.5px;color:var(--mut)}
+
+/* ── UI motifs ── */
+.motifs{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.motif{border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg2)}
+.motif .cap{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:14px}
+.frame-demo{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#0c1220}
+.chrome{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#0e1626;border-bottom:1px solid var(--line2)}
+.chrome i{width:11px;height:11px;border-radius:50%;display:block}
+.chrome i:nth-child(1){background:#ff5f57}.chrome i:nth-child(2){background:#febc2e}.chrome i:nth-child(3){background:#28c840}
+.chrome .url{margin-left:10px;font-family:var(--mono);font-size:11px;color:var(--mut)}
+.frame-body{padding:16px;display:flex;gap:10px;flex-wrap:wrap}
+.stat-tile{border:1px solid var(--line);border-radius:11px;padding:11px 15px;background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)}
+.stat-tile b{display:block;font-family:var(--mono);font-size:20px;font-variant-numeric:tabular-nums}
+.stat-tile span{font-size:11px;color:var(--mut)}
+.pills{display:flex;flex-wrap:wrap;gap:9px;margin-top:6px}
+.pill{font-family:var(--mono);font-size:12px;padding:5px 12px;border-radius:20px;border:1px solid var(--line2)}
+.pill.up{color:var(--up);border-color:rgba(34,197,94,.4)}
+.pill.dn{color:var(--down);border-color:rgba(239,68,68,.4)}
+.pill.nu{color:var(--acc2);border-color:rgba(55,224,200,.35)}
+.pill.al{color:var(--amb);border-color:rgba(251,191,36,.4)}
+.eyebrow-demo{display:flex;flex-direction:column;gap:6px}
+
+/* ── footer ── */
+footer{border-top:1px solid var(--line2);padding:32px 0 64px;color:var(--mut);font-size:13px}
+.foot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.foot .lk{display:flex;align-items:center;gap:10px}
+.foot .lk .m{font-size:20px}
+.badge{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--amb);
+  border:1px solid rgba(251,191,36,.35);border-radius:20px;padding:4px 12px}
+
+@media(max-width:860px){
+  .hero{grid-template-columns:1fr;padding-top:56px}
+  .radar-stage{order:-1}
+  .logo-grid,.swatches,.icons{grid-template-columns:1fr 1fr}
+  .type-grid,.voice,.motifs,.misuse{grid-template-columns:1fr}
+}
+@media(max-width:520px){
+  .logo-grid,.swatches,.icons{grid-template-columns:1fr}
+  .dd{grid-template-columns:1fr}.dd .col+.col{border-left:none;border-top:1px solid var(--line2)}
+  .scale .row{flex-direction:column;gap:4px}.scale .row .tk{width:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <header class="hero">
+    <div>
+      <div class="eyebrow">Brandbook · v1.0 · 2026</div>
+      <div class="wordmark">
+        <span class="mark" aria-hidden="true">📡</span>
+        <h1>Wallet <span class="g">Radar</span></h1>
+      </div>
+      <p class="lede">Роздрібний on-chain-радар: показує, що робить розумний капітал — накопичення китів, координовані групи, фази пампу й ліквідації — на одному екрані.</p>
+      <div class="chips">
+        <div class="chip"><b>~25</b><span>мереж під наглядом</span></div>
+        <div class="chip"><b>10</b><span>готових сигналів</span></div>
+        <div class="chip"><b>5</b><span>мов інтерфейсу</span></div>
+        <div class="chip"><b>$0</b><span>вартість даних у ядрі</span></div>
+      </div>
+    </div>
+    <div class="radar-stage">
+      <div class="radar" role="img" aria-label="Стилізований радар — символ бренду Wallet Radar">
+        <div class="grid"></div>
+        <div class="sweep"></div>
+        <span class="blip b1"></span><span class="blip b2"></span>
+        <span class="blip b3"></span><span class="blip b4"></span>
+        <div class="core"></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ESSENCE -->
+  <section id="essence">
+    <div class="sec-head">
+      <span class="sec-num">01 — ЯДРО</span>
+      <h2>Суть бренду</h2>
+      <p>Одна ідея, з якої випливають усі рішення: зробити видимим те, що бачать лише професійні термінали — і сказати про це простими сигналами.</p>
+    </div>
+    <div class="logo-grid" style="grid-template-columns:1fr 1fr">
+      <div class="plate">
+        <span class="cap">Позиціювання</span>
+        <p style="font-size:18px;line-height:1.5">Термінал рівня фонду (Nansen, Arkham) — але для роздрібного трейдера й за масовою ціною.</p>
+        <p style="font-size:13.5px;color:var(--mut)">Канонічний рядок: <span class="mono" style="color:var(--acc2)">«What smart money is doing — in one screen.»</span></p>
+      </div>
+      <div class="plate">
+        <span class="cap">Для кого</span>
+        <ul style="margin:0;padding-left:18px;color:var(--mut);font-size:14.5px;display:grid;gap:8px">
+          <li>Роздрібні крипто-трейдери, а не фонди</li>
+          <li>Ті, кому Nansen за $100–150/міс — задорого</li>
+          <li>Глобальна аудиторія: 5 мов з першого дня</li>
+        </ul>
+      </div>
+    </div>
+    <div class="plate" style="margin-top:16px">
+      <span class="cap">Три опори характеру</span>
+      <div class="icons" style="margin-top:6px">
+        <div class="ico"><div class="e">🎯</div><div class="nm">Прозорий</div><div class="ds">Показуємо джерело сигналу, а не «магію»</div></div>
+        <div class="ico"><div class="e">🗣️</div><div class="nm">Прямий</div><div class="ds">Прості сигнали замість жаргону</div></div>
+        <div class="ico"><div class="e">⚡</div><div class="nm">Швидкий</div><div class="ds">Стан ринку — одним поглядом</div></div>
+        <div class="ico"><div class="e">🤝</div><div class="nm">Чесний</div><div class="ds">Відкрито кажемо, що ще beta</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOGO -->
+  <section id="logo">
+    <div class="sec-head">
+      <span class="sec-num">02 — ЛОГОТИП</span>
+      <h2>Марка та вордмарк</h2>
+      <p>Марка — 📡 «супутникова тарілка / радар»: те, що ловить сигнал. Вордмарк — «Wallet» нейтральним чорнилом, «Radar» у фірмовому градієнті блакить→бірюза.</p>
+    </div>
+    <div class="logo-grid">
+      <div class="plate">
+        <span class="cap">Основний лок-ап</span>
+        <div class="lockup"><span class="m" aria-hidden="true">📡</span><span class="w">Wallet <span class="g">Radar</span></span></div>
+        <p style="font-size:13px;color:var(--mut)">Горизонтальний, марка ліворуч. Основне застосування.</p>
+      </div>
+      <div class="plate">
+        <span class="cap">Лише марка</span>
+        <div class="lockup"><span class="m" style="font-size:44px" aria-hidden="true">📡</span></div>
+        <p style="font-size:13px;color:var(--mut)">Аватар, favicon, застосунок. Мін. розмір 24 px.</p>
+      </div>
+      <div class="plate">
+        <span class="cap">Захисне поле</span>
+        <div class="clearspace"><div class="lockup"><span class="m" style="font-size:26px" aria-hidden="true">📡</span><span class="w" style="font-size:19px">Wallet <span class="g">Radar</span></span></div></div>
+        <p style="font-size:13px;color:var(--mut)">Відступ ≥ висоти марки з усіх боків.</p>
+      </div>
+    </div>
+    <div class="misuse">
+      <div class="mis"><span class="ok" aria-hidden="true">✓</span><div><div class="w2">Wallet <span class="g" style="background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent">Radar</span></div><p>Градієнт лише на «Radar», на темному фоні.</p></div></div>
+      <div class="mis"><span class="x" aria-hidden="true">✕</span><div><div class="w2" style="color:var(--amb)">Wallet Radar</div><p>Не перефарбовуй вордмарк у суцільний акцент.</p></div></div>
+      <div class="mis"><span class="x" aria-hidden="true">✕</span><div><div class="w2" style="font-style:italic;letter-spacing:.06em">Wallet Radar</div><p>Не нахиляй, не розріджуй, не стискай літери.</p></div></div>
+      <div class="mis"><span class="x" aria-hidden="true">✕</span><div><div class="w2" style="background:#EAF0FB;color:#080B14;padding:2px 8px;border-radius:6px;display:inline-block">📡 Wallet Radar</div><p>Не став марку на світлий фон без потреби — дім бренду темний.</p></div></div>
+    </div>
+  </section>
+
+  <!-- COLOR -->
+  <section id="color">
+    <div class="sec-head">
+      <span class="sec-num">03 — КОЛІР</span>
+      <h2>Палітра</h2>
+      <p>Глибокий навігаційний фон — «радар уночі». Один акцент-градієнт для дій і живих даних; амбер лише для попереджень; зелений/червоний — виключно семантика ринку.</p>
+    </div>
+    <div class="swatches">
+      <div class="sw"><div class="cap-chip" style="background:#080B14"><span class="role" style="color:#EAF0FB">Ground</span></div><div class="meta"><span class="name">Radar Night</span><span class="hex">#080B14</span><span class="use">Основний фон</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#0E1626"><span class="role" style="color:#EAF0FB">Surface</span></div><div class="meta"><span class="name">Panel</span><span class="hex">#0E1626</span><span class="use">Картки, фрейми</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#EAF0FB"><span class="role" style="color:#080B14">Ink</span></div><div class="meta"><span class="name">Ink</span><span class="hex">#EAF0FB</span><span class="use">Основний текст</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#8A97B4"><span class="role" style="color:#080B14">Muted</span></div><div class="meta"><span class="name">Muted</span><span class="hex">#8A97B4</span><span class="use">Вторинний текст, підписи</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#4C8DFF"><span class="role" style="color:#08111f">Accent</span></div><div class="meta"><span class="name">Signal Blue</span><span class="hex">#4C8DFF</span><span class="use">Дії, посилання, головний акцент</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#37E0C8"><span class="role" style="color:#083029">Accent 2</span></div><div class="meta"><span class="name">Radar Teal</span><span class="hex">#37E0C8</span><span class="use">Ярлики, «жива» дата</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#FBBF24"><span class="role" style="color:#3a2c02">Alert</span></div><div class="meta"><span class="name">Alert Amber</span><span class="hex">#FBBF24</span><span class="use">Попередження, beta-статус</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#24314F"><span class="role" style="color:#EAF0FB">Line</span></div><div class="meta"><span class="name">Hairline</span><span class="hex">#24314F</span><span class="use">Рамки, розділювачі</span></div></div>
+    </div>
+    <div class="swatches" style="margin-top:14px;grid-template-columns:repeat(2,1fr)">
+      <div class="sw"><div class="cap-chip" style="background:#22C55E"><span class="role" style="color:#052e14">Up · Accumulation</span></div><div class="meta"><span class="name">Market Up</span><span class="hex">#22C55E</span><span class="use">Накопичення, приплив, позитивна дельта</span></div></div>
+      <div class="sw"><div class="cap-chip" style="background:#EF4444"><span class="role" style="color:#3a0808">Down · Distribution</span></div><div class="meta"><span class="name">Market Down</span><span class="hex">#EF4444</span><span class="use">Розподіл, ліквідації, негативна дельта</span></div></div>
+    </div>
+    <div class="gradbar">
+      <div class="band"></div>
+      <div class="meta"><span class="name">Фірмовий градієнт — вордмарк, ключові акценти</span><span class="hex">linear-gradient(94deg, #4C8DFF → #37E0C8)</span></div>
+    </div>
+  </section>
+
+  <!-- TYPOGRAPHY -->
+  <section id="type">
+    <div class="sec-head">
+      <span class="sec-num">04 — ТИПОГРАФІКА</span>
+      <h2>Шрифти</h2>
+      <p>Два регістри. Системний sans несе заголовки й тіло — чисто й швидко. Моноширинний веде ярлики, числа й адреси: це «радарний» тон і рівні колонки цифр.</p>
+    </div>
+    <div class="type-grid">
+      <div class="type-card">
+        <div class="big">Aa Bb 24</div>
+        <div class="role">Display / UI — System Sans</div>
+        <div class="stack">-apple-system, "Segoe UI", system-ui, sans-serif</div>
+        <p class="note">Заголовки (700–820), тіло (400), акценти (650). Трекінг −0.02em на великих кеглях, <code>text-wrap:balance</code>.</p>
+      </div>
+      <div class="type-card">
+        <div class="big m">Aa Bb 0x1f 24</div>
+        <div class="role" style="color:var(--acc2)">Data / Labels — Mono</div>
+        <div class="stack">"SF Mono", ui-monospace, "Cascadia Code", monospace</div>
+        <p class="note">Ярлики UPPERCASE з трекінгом .2–.3em; числа — <code>tabular-nums</code>; адреси й хеші.</p>
+      </div>
+    </div>
+    <div class="scale">
+      <div class="row"><span class="tk">Hero · 74/820</span><span class="sp" style="font-size:34px;font-weight:820;letter-spacing:-.02em">Wallet Radar</span></div>
+      <div class="row"><span class="tk">H2 · 40/760</span><span class="sp" style="font-size:27px;font-weight:760;letter-spacing:-.02em">Що робить розумний капітал</span></div>
+      <div class="row"><span class="tk">H3 · 18/720</span><span class="sp" style="font-size:18px;font-weight:720">Накопичення китів</span></div>
+      <div class="row"><span class="tk">Body · 16/400</span><span class="sp" style="font-size:16px;color:var(--mut)">Прості сигнали замість складних дашбордів.</span></div>
+      <div class="row"><span class="tk">Eyebrow · 12/mono</span><span class="sp mono" style="font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--acc2)">LIVE · ON-CHAIN</span></div>
+      <div class="row"><span class="tk">Data · 20/mono</span><span class="sp mono" style="font-size:20px;color:var(--ink)">+1,284.50  ·  0x28c6…1d60</span></div>
+    </div>
+  </section>
+
+  <!-- VOICE -->
+  <section id="voice">
+    <div class="sec-head">
+      <span class="sec-num">05 — ГОЛОС</span>
+      <h2>Тон комунікації</h2>
+      <p>Говоримо як досвідчений трейдер поруч, а не як whitepaper. Прямо, чесно, по суті.</p>
+    </div>
+    <div class="voice">
+      <div class="pr"><div class="n mono">01</div><h3>Прямо, без жаргону</h3><p>«Кити накопичують», а не «інституційна акумуляція за он-чейн-метриками». Сигнал має читатися з першого разу.</p></div>
+      <div class="pr"><div class="n mono">02</div><h3>Чесно про стан</h3><p>Beta — то й кажемо beta. Не обіцяємо SLA, якого нема. Довіра важливіша за глянець.</p></div>
+      <div class="pr"><div class="n mono">03</div><h3>Дія = дієслово</h3><p>Кнопка каже, що станеться: «Відстежити» → тост «Відстежується». Активний стан, теперішній час.</p></div>
+      <div class="pr"><div class="n mono">04</div><h3>Роздрібний масштаб</h3><p>Пишемо до трейдера, а не до фонду. Ціна, простота й доступ — частина голосу.</p></div>
+    </div>
+    <div class="dodont">
+      <div class="dd">
+        <div class="col colY"><div class="lab y">Так</div><ul>
+          <li>«Кит зайшов у 3 монети за 24 год»</li>
+          <li>«Сигнал: фаза розподілу»</li>
+          <li>«Beta — дані на безкоштовних API»</li>
+          <li>«Слід до біржі за 15 колін»</li>
+        </ul></div>
+        <div class="col colN"><div class="lab n">Ні</div><ul>
+          <li><span>«Мульти-асетна ротація смарт-мані»</span></li>
+          <li><span>«Ведмежий он-чейн дайвердженс»</span></li>
+          <li><span>«Enterprise-grade real-time дані»</span></li>
+          <li><span>«Просунута евристична трасологія»</span></li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ICONS / SIGNAL -->
+  <section id="signal">
+    <div class="sec-head">
+      <span class="sec-num">06 — ЗНАКИ Й СИГНАЛИ</span>
+      <h2>Іконки та система світлофора</h2>
+      <p>Емодзі — не декор, а функціональна мова сутностей. Обмежений набір, кожен знак закріплений за роллю. Стан ринку кодуємо світлофором.</p>
+    </div>
+    <div class="icons">
+      <div class="ico"><div class="e">📡</div><div class="nm">Бренд / Радар</div><div class="ds">Марка, порожні стани, «сканування»</div></div>
+      <div class="ico"><div class="e">🐋</div><div class="nm">Кити</div><div class="ds">Великі гаманці, капітал-групи</div></div>
+      <div class="ico"><div class="e">📊</div><div class="nm">Сигнал / Дашборд</div><div class="ds">Метрики, фази, індикатори</div></div>
+      <div class="ico"><div class="e">🎯</div><div class="nm">Координація</div><div class="ds">Диригенти, синхронні рухи</div></div>
+    </div>
+    <div class="lights">
+      <div class="light"><span class="dot" style="background:#28c840;box-shadow:0 0 10px #28c840"></span><div class="txt"><b>Зелене — Накопичення</b><span>Приплив, фаза набору</span></div></div>
+      <div class="light"><span class="dot" style="background:#febc2e;box-shadow:0 0 10px #febc2e"></span><div class="txt"><b>Амбер — Обережно</b><span>Змішані сигнали, перехід</span></div></div>
+      <div class="light"><span class="dot" style="background:#ff5f57;box-shadow:0 0 10px #ff5f57"></span><div class="txt"><b>Червоне — Розподіл</b><span>Відтік, ризик, ліквідації</span></div></div>
+    </div>
+  </section>
+
+  <!-- UI MOTIFS -->
+  <section id="ui">
+    <div class="sec-head">
+      <span class="sec-num">07 — UI-МОТИВИ</span>
+      <h2>Будівельні блоки інтерфейсу</h2>
+      <p>Повторювані елементи, що роблять продукт упізнаваним: моно-ярлики, плитки-показники з рівними цифрами, «віконна» рамка скріншотів і пігулки станів.</p>
+    </div>
+    <div class="motifs">
+      <div class="motif">
+        <div class="cap">Eyebrow + заголовок</div>
+        <div class="eyebrow-demo">
+          <span class="kicker">WHALE ACTIVITY</span>
+          <span style="font-size:20px;font-weight:740">Накопичення за 24 години</span>
+        </div>
+      </div>
+      <div class="motif">
+        <div class="cap">Плитки-показники</div>
+        <div class="frame-body" style="padding:0">
+          <div class="stat-tile"><b>+1,284.5</b><span>ETH нетто-приплив</span></div>
+          <div class="stat-tile"><b style="color:var(--acc2)">17</b><span>активних китів</span></div>
+        </div>
+      </div>
+      <div class="motif">
+        <div class="cap">Рамка-«вікно» для показу</div>
+        <div class="frame-demo">
+          <div class="chrome"><i></i><i></i><i></i><span class="url">radar.app/whales</span></div>
+          <div class="frame-body"><div class="stat-tile"><b>~25</b><span>мереж</span></div><div class="stat-tile"><b>15</b><span>колін трасування</span></div></div>
+        </div>
+      </div>
+      <div class="motif">
+        <div class="cap">Пігулки станів</div>
+        <div class="pills">
+          <span class="pill up">▲ Accumulation</span>
+          <span class="pill dn">▼ Distribution</span>
+          <span class="pill nu">● Live</span>
+          <span class="pill al">Beta</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="foot">
+      <div class="lk"><span class="m" aria-hidden="true">📡</span><span>Wallet Radar · Брендбук v1.0 · зібрано з живої дизайн-системи продукту</span></div>
+      <span class="badge">Internal</span>
+    </div>
+  </footer>
+
+</div>
+
+</body>
+</html>

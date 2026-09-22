@@ -1,0 +1,44 @@
+[package]
+name = "rust-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Довідники (гаманці, токени, пороги) — у SQLite, не в коді.
+wr-store = { path = "../wr-store" }
+anyhow = "1.0.103"
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "alloc"] }
+dotenvy = "0.15.7"
+futures = "0.3.31"
+indexmap = "2.14.0"
+regex = "1.13.0"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+url = "2.5.8"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
+thiserror = "2.0.18"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+tokio = { version = "1.52.3", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["fs", "trace", "cors"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Sentry/GlitchTip. default-features=false + rustls, щоб НЕ тягнути native-tls (openssl):
+# решта стека вже на rustls (reqwest, tonic, tungstenite). `panic` ставить хук, що ловить
+# паніки воркерів; події з tracing::error! підхоплює sentry-tracing нижче.
+sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"] }
+sentry-tracing = "0.34"
+
+# gRPC до сателітів (mTLS). Кор — лише клієнт, сервер не генеруємо.
+tonic = { version = "0.12", features = ["tls"] }
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+# systemd-нотифікація існує лише на Linux; на Windows (запуск з ноута, поки ВМ лежить)
+# крейта немає чим користуватись — модуль watchdog там компілюється як no-op.
+[target.'cfg(unix)'.dependencies]
+sd-notify = "0.4"

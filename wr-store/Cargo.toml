@@ -1,0 +1,20 @@
+[package]
+name = "wr-store"
+version = "0.1.0"
+edition = "2021"
+
+# Єдине сховище довідкових даних Wallet Radar.
+# Правило: у .rs не лишається ЖОДНОЇ адреси, порогу, групи чи параметра стратегії —
+# усе це рядки в SQLite. Код читає знімок у пам'ять на старті (гарячі шляхи бігають
+# по 180 ГБ CSV — запит до БД на рядок був би катастрофою).
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+# ВАЖЛИВО: без windows-native keyring мовчки підставляє mock у пам'яті —
+# секрети "зберігаються" і зникають разом із процесом.
+keyring = { version = "3", features = ["windows-native"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+regex = "1"
+anyhow = "1"

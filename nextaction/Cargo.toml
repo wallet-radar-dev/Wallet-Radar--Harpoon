@@ -1,0 +1,310 @@
+[package]
+name = "nextaction"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nextaction"
+path = "src/lib.rs"
+
+[[bin]]
+name = "distribution"
+path = "src/distribution.rs"
+
+[[bin]]
+name = "netflow"
+path = "src/netflow.rs"
+
+[[bin]]
+name = "signal"
+path = "src/signal.rs"
+
+[[bin]]
+name = "backtest"
+path = "src/backtest.rs"
+
+[[bin]]
+name = "train"
+path = "src/train.rs"
+
+[[bin]]
+name = "avoid"
+path = "src/avoid.rs"
+
+[[bin]]
+name = "cluster"
+path = "src/cluster.rs"
+
+[[bin]]
+name = "strategy"
+path = "src/strategy.rs"
+
+[[bin]]
+name = "volatility"
+path = "src/volatility.rs"
+
+[[bin]]
+name = "coordination"
+path = "src/coordination.rs"
+
+[[bin]]
+name = "leadlag"
+path = "src/leadlag.rs"
+
+[dependencies]
+# Довідники (ролі мережі, пороги) — у SQLite, не в коді.
+wr-store = { path = "../wr-store" }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+wr-dict = { path = "../wr-dict" }   # спільний словник (Фаза 0.2): частка емісії = єдина формула
+
+[profile.release]
+opt-level = 3
+
+[[bin]]
+name = "enrich"
+path = "src/enrich.rs"
+
+[[bin]]
+name = "rotation"
+path = "src/rotation.rs"
+
+[[bin]]
+name = "cohort"
+path = "src/cohort.rs"
+
+[[bin]]
+name = "merge-graph"
+path = "src/merge_graph.rs"
+
+[[bin]]
+name = "timeline"
+path = "src/timeline.rs"
+
+[[bin]]
+name = "capital"
+path = "src/capital.rs"
+
+[[bin]]
+name = "emission"
+path = "src/emission.rs"
+
+[[bin]]
+name = "temporal-groups"
+path = "src/temporal_groups.rs"
+
+[[bin]]
+name = "cascade"
+path = "src/cascade.rs"
+
+[[bin]]
+name = "operators"
+path = "src/operators.rs"
+
+[[bin]]
+name = "pnl"
+path = "src/pnl.rs"
+
+[[bin]]
+name = "coretention"
+path = "src/coretention.rs"
+
+[[bin]]
+name = "volfull"
+path = "src/volfull.rs"
+
+[[bin]]
+name = "capgroups"
+path = "src/capgroups.rs"
+
+[[bin]]
+name = "walletflip"
+path = "src/walletflip.rs"
+
+[[bin]]
+name = "rolegroups"
+path = "src/rolegroups.rs"
+
+[[bin]]
+name = "rgverify"
+path = "src/rgverify.rs"
+
+[[bin]]
+name = "rgprofile"
+path = "src/rgprofile.rs"
+
+[[bin]]
+name = "rgprice"
+path = "src/rgprice.rs"
+
+[[bin]]
+name = "rgbehav"
+path = "src/rgbehav.rs"
+
+[[bin]]
+name = "rgholders"
+path = "src/rgholders.rs"
+
+[[bin]]
+name = "rgwallet"
+path = "src/rgwallet.rs"
+
+[[bin]]
+name = "rgmultiwhale"
+path = "src/rgmultiwhale.rs"
+
+[[bin]]
+name = "rgfunding"
+path = "src/rgfunding.rs"
+
+[[bin]]
+name = "rgpublish"
+path = "src/rgpublish.rs"
+
+[[bin]]
+name = "rgpredict"
+path = "src/rgpredict.rs"
+
+[[bin]]
+name = "kbqa"
+path = "src/kbqa.rs"
+
+[[bin]]
+name = "rgassetgroups"
+path = "src/rgassetgroups.rs"
+
+[[bin]]
+name = "rggroupmerge"
+path = "src/rggroupmerge.rs"
+
+[[bin]]
+name = "rgcapgroups"
+path = "src/rgcapgroups.rs"
+
+[[bin]]
+name = "kbask"
+path = "src/kbask.rs"
+
+[[bin]]
+name = "chainmix"
+path = "src/chainmix.rs"
+
+[[bin]]
+name = "rgphase"
+path = "src/rgphase.rs"
+
+[[bin]]
+name = "rgfund"
+path = "src/rgfund.rs"
+
+[[bin]]
+name = "rgsync"
+path = "src/rgsync.rs"
+
+[[bin]]
+name = "rgflow"
+path = "src/rgflow.rs"
+
+[[bin]]
+name = "rgpump"
+path = "src/rgpump.rs"
+
+[[bin]]
+name = "rgroles"
+path = "src/rgroles.rs"
+
+[[bin]]
+name = "rglead"
+path = "src/rglead.rs"
+
+[[bin]]
+name = "rghops"
+path = "src/rghops.rs"
+
+[[bin]]
+name = "uniproxy"
+path = "src/uniproxy.rs"
+
+[[bin]]
+name = "rgnull"
+path = "src/rgnull.rs"
+
+[[bin]]
+name = "rgnull2"
+path = "src/rgnull2.rs"
+
+[[bin]]
+name = "rgnull3"
+path = "src/rgnull3.rs"
+
+[[bin]]
+name = "rgnull4"
+path = "src/rgnull4.rs"
+
+[[bin]]
+name = "risk"
+path = "src/risk.rs"
+
+[[bin]]
+name = "alarm"
+path = "src/alarm.rs"
+
+[[bin]]
+name = "scenario"
+path = "src/scenario.rs"
+
+[[bin]]
+name = "sector"
+path = "src/sector.rs"
+
+[[bin]]
+name = "rgbridge"
+path = "src/rgbridge.rs"
+
+[[bin]]
+name = "rgnull5"
+path = "src/rgnull5.rs"
+
+[[bin]]
+name = "capreal"
+path = "src/capreal.rs"
+
+[[bin]]
+name = "grouppart"
+path = "src/grouppart.rs"
+
+[[bin]]
+name = "hopview"
+path = "src/hopview.rs"
+
+[[bin]]
+name = "srctest"
+path = "src/srctest.rs"
+
+[[bin]]
+name = "walletrole"
+path = "src/walletrole.rs"
+
+[[bin]]
+name = "kbprune"
+path = "src/kbprune.rs"
+
+[[bin]]
+name = "flowclass"
+path = "src/flowclass.rs"
+
+[[bin]]
+name = "txindex"
+path = "src/txindex.rs"
+
+[[bin]]
+name = "otcfind"
+path = "src/otcfind.rs"
+
+[[bin]]
+name = "entrylag"
+path = "src/entrylag.rs"
+
+[[bin]]
+name = "cascadebt"
+path = "src/cascadebt.rs"

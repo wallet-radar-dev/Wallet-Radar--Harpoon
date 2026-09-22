@@ -1,0 +1,7 @@
+{
+  "version": "client-A 2026-08",
+  "grab_emission": 0.85,
+  "min_cluster": 10,
+  "price_eth_usd": 3200,
+  "price_uncertainty": 0.2
+}

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="uk" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0b0f1a" />
+  <meta name="description" content="Wallet Radar — мультичейн-трекер китів і смарт-мані: жива стрічка ончейн-подій, граф зв'язків, концентрація власників і форензика координованих груп." />
+  <meta name="robots" content="noindex" />
+  <title>Wallet Radar</title>
+
+  <!-- Radar-glyph favicon (inline SVG, no extra request) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0f1a'/%3E%3Cg fill='none' stroke='%233b82f6' stroke-width='2'%3E%3Ccircle cx='16' cy='16' r='4'/%3E%3Ccircle cx='16' cy='16' r='9' opacity='.55'/%3E%3C/g%3E%3Cpath d='M16 16 L26 9' stroke='%2322c55e' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%233b82f6'/%3E%3C/svg%3E" />
+
+  <!-- Production Tailwind build — compiled from web/tw-input.css via
+       `npm run build:css` (config: tailwind.config.cjs). No dev CDN. -->
+  <link rel="stylesheet" href="app.css?v=ccef32d5" />
+
+</head>
+<body class="bg-base text-slate-200 font-sans min-h-screen antialiased">
+
+  <a href="#main" class="sr-only skip-link" data-i18n="skip_to_content">Перейти до вмісту</a>
+
+  <!-- ВЕРХНЯ ПАНЕЛЬ -->
+  <header class="border-b border-edge bg-panel/60 backdrop-blur sticky top-0 z-20">
+    <!-- Шапка ширша за контент (max-w-7xl): 8 кнопок + мова + статус потребують ~1170px, а 7xl
+         дає лише ~920 — саме тому ряд переносився. flex-wrap лишається запобіжником для вузьких вікон. -->
+    <div class="max-w-[1600px] mx-auto px-5 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="w-9 h-9 rounded-xl bg-accent/20 grid place-items-center text-accent text-xl" aria-hidden="true">📡</div>
+        <div>
+          <h1 class="font-semibold text-lg leading-tight">Wallet Radar</h1>
+          <!-- Підпис з'їдає ~155px і сам по собі виштовхував нав-ряд на другий рядок.
+               Показуємо його лише там, де ширини вистачає на все. -->
+          <p class="hidden min-[1600px]:block text-xs text-slate-400 leading-tight" data-i18n="brand_subtitle"></p>
+        </div>
+      </div>
+      <nav class="flex flex-wrap items-center justify-end gap-1.5 text-sm" aria-label="Інструменти">
+        <button type="button" id="graph-btn"
+          class="inline-flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🕸</span><span data-i18n="graph_btn"></span>
+        </button>
+        <button type="button" id="tracer-btn"
+          class="inline-flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🧭</span><span data-i18n="tracer_btn"></span>
+        </button>
+        <button type="button" id="conc-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🐋</span><span data-i18n="conc_btn"></span>
+        </button>
+        <button type="button" id="clusters-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🧩</span><span data-i18n="cl_btn"></span>
+        </button>
+        <button type="button" id="sm-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🐋</span><span data-i18n="sm_btn"></span>
+        </button>
+        <button type="button" id="strat-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🏛</span><span data-i18n="strat_btn"></span>
+        </button>
+        <button type="button" id="dash-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">📊</span><span data-i18n="dash_btn"></span>
+        </button>
+        <button type="button" id="alerts-btn"
+          class="relative inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🔔</span><span data-i18n="alerts_btn"></span>
+          <span id="alert-badge" class="hidden absolute -top-1.5 -right-1.5 bg-bad text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none" role="status" aria-live="polite"></span>
+        </button>
+        <div class="flex items-center gap-1.5">
+          <span class="text-slate-500" aria-hidden="true">🌐</span>
+          <label for="lang-select" class="sr-only" data-i18n="lang_label">Мова інтерфейсу</label>
+          <select id="lang-select"
+            class="bg-panel2 border border-edge rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-accent">
+            <option value="uk">Українська</option>
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+            <option value="fr">Français</option>
+            <option value="ru">Русский</option>
+          </select>
+        </div>
+        <span id="price-indicator" class="hidden sm:inline text-xs text-slate-400" title=""></span>
+        <div class="flex items-center gap-2">
+          <span id="conn-dot" class="w-2.5 h-2.5 rounded-full bg-good pulse-dot" aria-hidden="true"></span>
+          <span id="conn-text" class="text-xs text-slate-300 whitespace-nowrap" data-i18n="conn_demo"></span>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="max-w-7xl mx-auto px-5 py-6 space-y-6">
+
+    <!-- ПОШУК -->
+    <section class="relative" aria-label="Пошук" role="search">
+      <div class="relative">
+        <span class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true">🔎</span>
+        <label for="search-input" class="sr-only" data-i18n="search_label">Пошук гаманця, активу або сутності</label>
+        <input id="search-input" type="search" autocomplete="off" spellcheck="false" data-i18n-ph="search_ph"
+          aria-controls="search-results"
+          class="w-full bg-panel border border-edge rounded-2xl pl-11 pr-4 py-3 text-sm focus:outline-none focus:border-accent placeholder:text-slate-500" />
+      </div>
+      <div id="search-results" role="listbox" class="hidden absolute z-30 mt-2 w-full bg-panel border border-edge rounded-2xl shadow-2xl overflow-hidden max-h-96 overflow-y-auto"></div>
+    </section>
+
+    <!-- КАРТКИ-ПОКАЗНИКИ -->
+    <section class="grid grid-cols-2 lg:grid-cols-4 gap-4" aria-label="Ключові показники">
+      <div class="bg-panel border border-edge rounded-2xl p-4">
+        <p class="text-xs text-slate-400" data-i18n="stat_wallets"></p>
+        <p id="stat-wallets" class="text-2xl font-semibold mt-1">0</p>
+      </div>
+      <div class="bg-panel border border-edge rounded-2xl p-4">
+        <p class="text-xs text-slate-400" data-i18n="stat_value"></p>
+        <p id="stat-value" class="text-2xl font-semibold mt-1">$0</p>
+        <!-- Покриття: баланси добираються ліниво, тож сума майже завжди часткова. Порожній рядок,
+             коли відомі всі — щоб плашка не кричала там, де їй нема про що попереджати. -->
+        <p id="stat-value-note" class="text-xs text-slate-500 mt-0.5"></p>
+      </div>
+      <div class="bg-panel border border-edge rounded-2xl p-4">
+        <p class="text-xs text-slate-400" data-i18n="stat_events"></p>
+        <p id="stat-events" class="text-2xl font-semibold mt-1">0</p>
+      </div>
+      <div class="bg-panel border border-edge rounded-2xl p-4">
+        <p class="text-xs text-slate-400" data-i18n="stat_networks"></p>
+        <p id="stat-networks" class="text-2xl font-semibold mt-1">0</p>
+      </div>
+    </section>
+
+    <div class="grid lg:grid-cols-4 gap-6">
+
+      <!-- ЛІВА КОЛОНКА: додати гаманець + список -->
+      <section class="lg:col-span-1 space-y-4" aria-labelledby="wallets-heading">
+        <div id="add-wallet-card" class="bg-panel border border-edge rounded-2xl p-4">
+          <h2 class="font-medium mb-3" data-i18n="add_wallet"></h2>
+          <form id="add-form" class="space-y-3">
+            <label for="addr-input" class="sr-only" data-i18n="ph_address">Адреса гаманця</label>
+            <input id="addr-input" type="text" data-i18n-ph="ph_address"
+              class="w-full bg-panel2 border border-edge rounded-xl px-3 py-2 text-sm font-mono
+                     focus:outline-none focus:border-accent placeholder:text-slate-500" />
+            <div>
+              <div class="flex items-center justify-between mb-1.5">
+                <span class="text-xs text-slate-400" id="networks-pick-label" data-i18n="networks_pick"></span>
+                <div class="flex gap-3 text-xs">
+                  <button type="button" id="net-all" class="text-accent hover:underline" data-i18n="sel_all"></button>
+                  <button type="button" id="net-none" class="text-slate-400 hover:underline" data-i18n="sel_none"></button>
+                </div>
+              </div>
+              <div id="net-checkboxes" role="group" aria-labelledby="networks-pick-label" class="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1"></div>
+            </div>
+            <label for="label-input" class="sr-only" data-i18n="ph_label">Мітка</label>
+            <input id="label-input" type="text" data-i18n-ph="ph_label"
+              class="w-full bg-panel2 border border-edge rounded-xl px-3 py-2 text-sm
+                     focus:outline-none focus:border-accent placeholder:text-slate-500" />
+            <button type="submit" data-i18n="btn_add_wallet"
+              class="w-full bg-accent hover:bg-blue-500 text-white text-sm font-medium py-2 rounded-xl transition">
+            </button>
+          </form>
+        </div>
+
+        <div class="bg-panel border border-edge rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 id="wallets-heading" class="font-medium" data-i18n="wallets"></h2>
+            <span id="wallet-count" class="text-xs text-slate-400"></span>
+          </div>
+          <ul id="wallet-list" class="space-y-2"></ul>
+        </div>
+      </section>
+
+      <!-- ЦЕНТРАЛЬНА КОЛОНКА: жива стрічка подій -->
+      <section class="lg:col-span-2" aria-labelledby="feed-heading">
+        <div class="bg-panel border border-edge rounded-2xl overflow-hidden">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-edge">
+            <div class="flex items-center gap-2">
+              <h2 id="feed-heading" class="font-medium" data-i18n="live_feed"></h2>
+              <span class="w-2 h-2 rounded-full bg-good pulse-dot" aria-hidden="true"></span>
+            </div>
+            <button type="button" id="clear-feed" class="text-xs text-slate-400 hover:text-slate-200" data-i18n="clear"></button>
+          </div>
+          <ul id="event-feed" aria-live="polite" aria-relevant="additions" class="divide-y divide-edge max-h-[60vh] overflow-y-auto">
+            <li class="px-4 py-10 text-center text-slate-500 text-sm" id="feed-empty" data-i18n="feed_empty"></li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ПРАВА ПАНЕЛЬ: групи капіталу (кластери Smart Money) -->
+      <section class="lg:col-span-1" aria-labelledby="cg-heading">
+        <div class="bg-panel border border-edge rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-1">
+            <h2 id="cg-heading" class="font-medium" data-i18n="cg_title"></h2>
+            <button type="button" id="cg-refresh" class="text-xs text-slate-400 hover:text-accent" data-i18n-title="cg_refresh_title" data-i18n-aria="cg_refresh_title" aria-label="Оновити">↻</button>
+          </div>
+          <div class="text-[11px] text-slate-500 mb-2" data-i18n="cg_sub"></div>
+          <div id="capital-groups" class="space-y-2 max-h-[64vh] overflow-y-auto"></div>
+        </div>
+      </section>
+
+      <!-- АКТИВИ ГРУП КАПІТАЛУ: частка емісії, яку тримає група (від 1%) -->
+      <section class="bg-panel/60 border border-edge rounded-2xl p-4">
+        <h2 class="text-sm font-semibold mb-1">Активи груп капіталу</h2>
+        <p class="text-[11px] text-slate-500 mb-3">
+          Частка емісії, яку тримає група в кожному активі — від найбільшої до найменшої.
+          Натисни групу, щоб розгорнути; актив — щоб побачити холдерів.
+        </p>
+        <div id="group-assets" class="max-h-[70vh] overflow-y-auto"></div>
+      </section>
+    </div>
+
+    <p class="text-center text-xs text-slate-600" data-i18n="footer_note"></p>
+    <p class="text-center text-[10px] text-slate-600 mt-1" data-i18n="disclaimer_note"></p>
+  </main>
+
+  <!-- МОДАЛЬНЕ ВІКНО: деталі події -->
+  <div id="event-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="event-modal-title">
+    <div id="modal-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="event-modal-title" class="font-semibold" data-i18n="modal_title"></h3>
+        <button type="button" id="modal-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div id="modal-body" class="p-5 space-y-4"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО ГРАФА ЗВ'ЯЗКІВ (павутина) -->
+  <div id="graph-modal" class="hidden fixed inset-0 z-40 bg-base/95 backdrop-blur flex-col" role="dialog" aria-modal="true" aria-labelledby="graph-modal-title">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-edge shrink-0">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="text-xl" aria-hidden="true">🕸</span>
+        <h3 id="graph-modal-title" class="font-semibold truncate" data-i18n="graph_title"></h3>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <label for="graph-wallet-select" class="sr-only" data-i18n="graph_wallet_label">Гаманець графа</label>
+        <select id="graph-wallet-select" class="bg-panel2 border border-edge rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-accent max-w-[40vw]"></select>
+        <button type="button" id="graph-wallet-del" class="hidden text-slate-500 hover:text-bad border border-edge hover:border-bad rounded-lg px-2 py-1 text-xs transition" data-i18n-title="graph_del_title" data-i18n-aria="graph_del_title" aria-label="Видалити">🗑</button>
+        <button type="button" id="graph-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+    </div>
+    <div class="relative flex-1 overflow-hidden">
+      <canvas id="graph-canvas" class="absolute inset-0 w-full h-full" role="img" data-i18n-aria="graph_canvas_label"></canvas>
+      <div id="graph-empty" class="hidden absolute inset-0 grid place-items-center text-slate-500 text-sm" data-i18n="graph_empty"></div>
+      <div id="graph-legend" class="absolute top-3 left-3 bg-panel/80 border border-edge rounded-xl p-3 text-xs space-y-1"></div>
+      <div id="graph-stats" class="absolute top-3 right-3 bg-panel/80 border border-edge rounded-xl px-3 py-2 text-xs"></div>
+      <div class="absolute bottom-3 left-3 text-xs text-slate-500" data-i18n="graph_hint"></div>
+      <div id="graph-tooltip" class="hidden absolute pointer-events-none bg-panel border border-edge rounded-lg px-3 py-2 text-xs shadow-lg z-10"></div>
+      <button type="button" id="graph-showall" class="hidden absolute top-3 left-1/2 -translate-x-1/2 bg-panel border border-edge rounded-full px-4 py-1.5 text-xs hover:border-accent transition z-10"></button>
+      <div id="graph-detail" class="absolute top-0 right-0 bottom-0 w-80 max-w-[85vw] bg-panel/95 border-l border-edge p-4 overflow-y-auto transition-transform duration-200 translate-x-full z-20"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО ПОРТФЕЛЯ ГАМАНЦЯ: усі активи -->
+  <div id="portfolio-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="portfolio-modal-title">
+    <div id="portfolio-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="portfolio-modal-title" class="font-semibold" data-i18n="pf_title"></h3>
+        <button type="button" id="portfolio-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div id="portfolio-body" class="p-5 space-y-5"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО ІНСТИТУЦІЙНОЇ СТРАТЕГІЇ -->
+  <div id="strat-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="strat-modal-title">
+    <div id="strat-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-xl max-h-[82vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="strat-modal-title" class="font-semibold" data-i18n="strat_title"></h3>
+        <button type="button" id="strat-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div id="strat-body" class="p-5"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО КОНЦЕНТРАЦІЇ ВЛАСНИКІВ -->
+  <div id="conc-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="conc-modal-title">
+    <div id="conc-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="conc-modal-title" class="font-semibold" data-i18n="conc_title"></h3>
+        <button type="button" id="conc-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div class="p-5 space-y-3">
+        <div class="flex gap-2">
+          <label for="conc-input" class="sr-only" data-i18n="conc_ph">Контракт токена</label>
+          <input id="conc-input" type="text" data-i18n-ph="conc_ph" autocomplete="off" spellcheck="false"
+            class="flex-1 bg-panel2 border border-edge rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent placeholder:text-slate-500" />
+          <button type="button" id="conc-analyze" data-i18n="conc_analyze"
+            class="bg-accent hover:bg-blue-500 text-white text-sm font-medium px-4 rounded-lg transition"></button>
+        </div>
+        <div id="conc-body" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ВІКНО DASHBOARD -->
+  <div id="dash-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="dash-modal-title">
+    <div id="dash-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-xl max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="dash-modal-title" class="font-semibold" data-i18n="dash_title"></h3>
+        <button type="button" id="dash-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div id="dash-grid" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+        <div class="bg-panel2 border border-edge rounded-xl p-3 flex flex-wrap gap-2 items-center">
+          <label for="dash-type" class="sr-only" data-i18n="dash_type_label">Тип метрики</label>
+          <select id="dash-type" class="bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent"></select>
+          <label for="dash-target" class="sr-only" data-i18n="dash_target_ph">Ціль</label>
+          <input id="dash-target" type="text" data-i18n-ph="dash_target_ph"
+            class="flex-1 min-w-[140px] bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent placeholder:text-slate-500" />
+          <button type="button" id="dash-add" data-i18n="dash_add"
+            class="bg-accent hover:bg-blue-500 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ВІКНО ENTITY-ПРОФІЛЮ -->
+  <div id="entity-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="entity-modal-title">
+    <div id="entity-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="entity-modal-title" class="font-semibold" data-i18n="ent_title"></h3>
+        <button type="button" id="entity-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div id="entity-body" class="p-5 space-y-4"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО ALERTS: правила сповіщень -->
+  <div id="alerts-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="alerts-modal-title">
+    <div id="alerts-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="alerts-modal-title" class="font-semibold" data-i18n="alerts_title"></h3>
+        <button type="button" id="alerts-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div>
+          <div class="text-xs text-slate-400 mb-1" data-i18n="alerts_rules_h"></div>
+          <div id="alerts-rules" class="space-y-2"></div>
+        </div>
+        <div class="bg-panel2 border border-edge rounded-xl p-3 space-y-2">
+          <div class="grid grid-cols-2 gap-2">
+            <label for="alert-scope" class="sr-only" data-i18n="alerts_scope_label">Область правила</label>
+            <select id="alert-scope" class="bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent"></select>
+            <label for="alert-kind" class="sr-only" data-i18n="alerts_kind_label">Тип правила</label>
+            <select id="alert-kind" class="bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent"></select>
+          </div>
+          <label for="alert-target" class="sr-only" data-i18n="alerts_target_ph">Ціль правила</label>
+          <input id="alert-target" type="text" data-i18n-ph="alerts_target_ph"
+            class="w-full bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent placeholder:text-slate-500" />
+          <div class="flex gap-2 items-center">
+            <label for="alert-min" class="text-xs text-slate-400" data-i18n="alerts_minusd"></label>
+            <input id="alert-min" type="number" min="0" value="50000"
+              class="flex-1 bg-panel border border-edge rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent" />
+            <button type="button" id="alert-add" data-i18n="alerts_add"
+              class="bg-accent hover:bg-blue-500 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition"></button>
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1" data-i18n="alpha_feed_h"></div>
+          <div id="alerts-alpha" class="space-y-1"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1" data-i18n="vol_watch_h"></div>
+          <div id="alerts-volatility" class="space-y-1"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1" data-i18n="beh_alerts_h"></div>
+          <div id="alerts-behavior" class="space-y-2"></div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-400 mb-1" data-i18n="alerts_log_h"></div>
+          <div id="alerts-log"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ВІКНО TRACER: трасування потоків -->
+  <div id="tracer-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="tracer-modal-title">
+    <div id="tracer-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-md max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10 gap-3">
+        <h3 id="tracer-modal-title" class="font-semibold truncate" data-i18n="tracer_title"></h3>
+        <div class="flex items-center gap-3 shrink-0">
+          <label for="tracer-wallet-select" class="sr-only" data-i18n="tracer_wallet_label">Гаманець трасування</label>
+          <select id="tracer-wallet-select" class="bg-panel2 border border-edge rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-accent max-w-[40vw]"></select>
+          <button type="button" id="tracer-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+        </div>
+      </div>
+      <div id="tracer-body" class="p-5 space-y-2"></div>
+    </div>
+  </div>
+
+  <!-- ВІКНО АКТИВУ: топ-тримачі -->
+  <div id="asset-modal" class="hidden fixed inset-0 z-40 items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title">
+    <div id="asset-backdrop" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-panel border border-edge rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto animate-slidein">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-edge sticky top-0 bg-panel z-10">
+        <h3 id="asset-modal-title" class="font-semibold" data-i18n="holders_title"></h3>
+        <button type="button" id="asset-close" class="text-slate-400 hover:text-slate-200 text-2xl leading-none" data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+      <div id="asset-body" class="p-5 space-y-4"></div>
+    </div>
+  </div>
+
+  <!-- СПОВІЩЕННЯ (toast) -->
+  <div id="toasts" class="fixed bottom-4 right-4 space-y-2 z-50 w-80" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <div style="max-width:640px;margin:15vh auto;padding:24px;text-align:center;font-family:system-ui,sans-serif;color:#e2e8f0;background:#121826;border:1px solid #27324a;border-radius:16px">
+      Wallet Radar потребує JavaScript. Увімкніть його, щоб переглянути живу стрічку ончейн-подій.
+    </div>
+  </noscript>
+
+  <script src="app.js?v=e2c65736"></script>
+</body>
+</html>

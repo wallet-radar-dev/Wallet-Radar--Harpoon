@@ -1,0 +1,46 @@
+[package]
+name = "patterns"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "patterns"
+path = "src/main.rs"
+
+[[bin]]
+name = "orderbook"
+path = "src/bin/orderbook.rs"
+
+[[bin]]
+name = "tradetape"
+path = "src/bin/tradetape.rs"
+
+[[bin]]
+name = "flowbt"
+path = "src/bin/flowbt.rs"
+
+[[bin]]
+name = "casccurve"
+path = "src/bin/casccurve.rs"
+
+[[bin]]
+name = "cascbt"
+path = "src/bin/cascbt.rs"
+
+[[bin]]
+name = "gtohlcv"
+path = "src/bin/gtohlcv.rs"
+
+[[bin]]
+name = "selltape"
+path = "src/bin/selltape.rs"
+
+[dependencies]
+# Довідники (адреси, пороги) — у SQLite, не в коді.
+wr-store = { path = "../wr-store" }
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+wr-dict = { path = "../wr-dict" }   # спільний словник (єдина мова даних, L2)
+
+[profile.release]
+opt-level = 3

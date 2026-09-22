@@ -1,0 +1,354 @@
+[package]
+name = "backfill"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "backfill"
+path = "src/lib.rs"
+
+[[bin]]
+name = "backfill"
+path = "src/main.rs"
+
+[[bin]]
+name = "backfill2"
+path = "src/backfill2.rs"
+
+[[bin]]
+name = "btc-signature"
+path = "src/btc_signature.rs"
+
+[[bin]]
+name = "btc-expand"
+path = "src/btc_expand.rs"
+
+[[bin]]
+name = "btc-collect"
+path = "src/btc_collect.rs"
+
+[[bin]]
+name = "eth-native"
+path = "src/eth_native.rs"
+
+[[bin]]
+name = "expand-backfill-list"
+path = "src/expand_backfill_list.rs"
+
+[dependencies]
+# Довідники (стейбли, адреси, пороги) — у SQLite, не в коді.
+wr-store = { path = "../wr-store" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+futures = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+wr-dict = { path = "../wr-dict" }   # спільний словник (Фаза 0.2): частка емісії = єдина формула
+zstd = "0.13"                       # архіви transfers-*.csv: 7.3x стиснення, див. src/csvin.rs
+
+[profile.release]
+opt-level = 1
+
+[[bin]]
+name = "desk-flow"
+path = "src/desk_flow.rs"
+
+[[bin]]
+name = "capital-classify"
+path = "src/capital_classify.rs"
+
+[[bin]]
+name = "eth-funders"
+path = "src/eth_funders.rs"
+
+[[bin]]
+name = "eth-edges"
+path = "src/eth_edges.rs"
+
+[[bin]]
+name = "paribu-deanon"
+path = "src/paribu_deanon.rs"
+
+[[bin]]
+name="relay-monitor"
+path="src/relay_monitor.rs"
+
+[[bin]]
+name="distrib-alert"
+path="src/distrib_alert.rs"
+
+[[bin]]
+name="hubtrace"
+path="src/hubtrace.rs"
+
+[[bin]]
+name="cexcrawl"
+path="src/cexcrawl.rs"
+
+[[bin]]
+name="tokprices"
+path="src/tokprices.rs"
+
+[[bin]]
+name="cexsignal"
+path="src/cexsignal.rs"
+
+[[bin]]
+name="tokliq"
+path="src/tokliq.rs"
+
+[[bin]]
+name="ethbal"
+path="src/ethbal.rs"
+
+[[bin]]
+name="eth-edges2"
+path="src/eth_edges2.rs"
+
+[[bin]]
+name="emission"
+path="src/emission.rs"
+
+[[bin]]
+name="emgroups"
+path="src/emgroups.rs"
+
+[[bin]]
+name="behavfp"
+path="src/behavfp.rs"
+
+[[bin]]
+name="rhythm"
+path="src/rhythm.rs"
+
+[[bin]]
+name="netassets"
+path="src/netassets.rs"
+
+[[bin]]
+name="tokbal2"
+path="src/tokbal2.rs"
+
+[[bin]]
+name="gasprint"
+path="src/gasprint.rs"
+
+[[bin]]
+name="aftermoney"
+path="src/aftermoney.rs"
+
+[[bin]]
+name="tokbal"
+path="src/tokbal.rs"
+
+[[bin]]
+name="tokenpnl"
+path="src/tokenpnl.rs"
+
+[[bin]]
+name="pnlreport"
+path="src/pnlreport.rs"
+
+[[bin]]
+name="linkall"
+path="src/linkall.rs"
+
+[[bin]]
+name="linkedges"
+path="src/linkedges.rs"
+
+[[bin]]
+name="histprices"
+path="src/histprices.rs"
+
+[[bin]]
+name="holderlink"
+path="src/holderlink.rs"
+
+[[bin]]
+name="eventstudy"
+path="src/eventstudy.rs"
+
+[[bin]]
+name="wakeup"
+path="src/wakeup.rs"
+
+[[bin]]
+name="groupsig"
+path="src/groupsig.rs"
+
+[[bin]]
+name="seedscan"
+path="src/seedscan.rs"
+
+[[bin]]
+name="kbfacts"
+path="src/kbfacts.rs"
+
+[[bin]]
+name="seedcohort"
+path="src/seedcohort.rs"
+
+[[bin]]
+name="sellstudy"
+path="src/sellstudy.rs"
+
+[[bin]]
+name="txfull"
+path="src/txfull.rs"
+
+[[bin]]
+name="group-monitor"
+path="src/group_monitor.rs"
+
+[[bin]]
+name="emission-dossier"
+path="src/emission_dossier.rs"
+
+[[bin]]
+name="txmass"
+path="src/txmass.rs"
+
+[[bin]]
+name="codecheck"
+path="src/codecheck.rs"
+
+[[bin]]
+name = "net6k"
+path = "src/net6k.rs"
+
+[[bin]]
+name = "net6kpnl"
+path = "src/net6kpnl.rs"
+
+[[bin]]
+name = "tokdeep"
+path = "src/tokdeep.rs"
+
+[[bin]]
+name = "tokalloc"
+path = "src/tokalloc.rs"
+
+[[bin]]
+name = "toksupply"
+path = "src/toksupply.rs"
+
+[[bin]]
+name = "realbal"
+path = "src/realbal.rs"
+
+[[bin]]
+name = "mmfind"
+path = "src/mmfind.rs"
+
+[[bin]]
+name = "outflow"
+path = "src/outflow.rs"
+
+[[bin]]
+name = "eoacheck"
+path = "src/eoacheck.rs"
+
+[[bin]]
+name = "trace2"
+path = "src/trace2.rs"
+
+[[bin]]
+name = "hourprices"
+path = "src/hourprices.rs"
+
+[[bin]]
+name = "hourimpact"
+path = "src/hourimpact.rs"
+
+[[bin]]
+name = "tokreport"
+path = "src/tokreport.rs"
+
+[[bin]]
+name = "campwatch"
+path = "src/campwatch.rs"
+
+[[bin]]
+name = "funderkids"
+path = "src/funderkids.rs"
+
+[[bin]]
+name = "regroup"
+path = "src/regroup.rs"
+
+[[bin]]
+name = "bullrun"
+path = "src/bullrun.rs"
+
+[[bin]]
+name = "rolemap"
+path = "src/rolemap.rs"
+
+[[bin]]
+name = "flowtrace"
+path = "src/flowtrace.rs"
+
+[[bin]]
+name = "patdb"
+path = "src/patdb.rs"
+
+[[bin]]
+name = "holdercheck"
+path = "src/holdercheck.rs"
+
+[[bin]]
+name = "corefund"
+path = "src/corefund.rs"
+
+[[bin]]
+name = "flowdir"
+path = "src/flowdir.rs"
+
+[[bin]]
+name = "livewatch"
+path = "src/livewatch.rs"
+
+[[bin]]
+name = "cexemis"
+path = "src/cexemis.rs"
+
+[[bin]]
+name = "bullsell"
+path = "src/bullsell.rs"
+
+[[bin]]
+name = "supplyat"
+path = "src/supplyat.rs"
+
+[[bin]]
+name="fwdindex"
+path="src/fwdindex.rs"
+
+[[bin]]
+name = "ethflow"
+path = "src/ethflow.rs"
+
+[[bin]]
+name = "groupbook"
+path = "src/groupbook.rs"
+
+[[bin]]
+name = "verify"
+path = "src/verify.rs"
+
+[[bin]]
+name = "truncaudit"
+path = "src/truncaudit.rs"
+
+[[bin]]
+name="memberprofile"
+path="src/memberprofile.rs"
+
+[[bin]]
+name = "botd"
+path = "src/botd.rs"
+
+[[bin]]
+name = "dexswap"
+path = "src/dexswap.rs"

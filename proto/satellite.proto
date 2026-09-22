@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+// Кор ↔ сателіт. Кор НЕ тримає жодного ключа: кожен звертання до платного/keyed API йде
+// сюди по gRPC поверх mTLS, а ключ підставляє вже сателіт зі свого оточення.
+//
+// Fetch навмисно ЗАГАЛЬНИЙ, а не «семантичний»: сателіт повертає тіло провайдера
+// БАЙТ-У-БАЙТ. Завдяки цьому golden-перевірені парсери кора (parse_txlist_page,
+// parse_tokentx_page, moralis::parse_balances) лишаються недоторканими — ми міняємо
+// транспорт, а не сенс даних. Семантичний API довелося б дублювати в двох місцях.
+package satellite.v1;
+
+service Upstream {
+  // Один виклик до провайдера. Ключ підставляє сателіт — у запиті його немає й бути не може.
+  rpc Fetch(FetchRequest) returns (FetchResponse);
+  // Стан сателіта: які провайдери реально налаштовані (мають ключ), який у них ліміт.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message FetchRequest {
+  // Тільки з реєстру сателіта: "etherscan" | "moralis" | "arkham" | "glassnode" | "lunarcrush".
+  // Довільний хост передати НЕМОЖЛИВО — інакше сателіт став би відкритим проксі (SSRF).
+  string provider = 1;
+  // Шлях під базовим URL провайдера, напр. "/v2/api". Мусить починатися з "/".
+  string path = 2;
+  // Параметри запиту БЕЗ ключа.
+  map<string, string> query = 3;
+}
+
+message FetchResponse {
+  // HTTP-статус провайдера як є (200, 429, 403…) — кор сам вирішує, що це означає.
+  uint32 status = 1;
+  // Тіло відповіді провайдера, байт-у-байт.
+  bytes body = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string satellite_id = 1;
+  repeated ProviderStatus providers = 2;
+}
+
+message ProviderStatus {
+  string name = 1;
+  // false = ключа в оточенні цього сателіта немає. Кор має бачити це ЯВНО, а не отримувати
+  // порожні відповіді й гадати.
+  bool configured = 2;
+  uint32 min_gap_ms = 3;
+  uint64 calls_total = 4;
+}

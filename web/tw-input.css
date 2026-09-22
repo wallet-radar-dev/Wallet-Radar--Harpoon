@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+@keyframes slidein { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.animate-slidein { animation: slidein .35s ease-out; }
+@keyframes pulsedot { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.pulse-dot { animation: pulsedot 1.6s infinite; }
+/* Respect users who ask for less motion (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}
+
+/* ── Keyboard accessibility ─────────────────────────────────────────────── */
+/* The utility classes use `focus:outline-none`; restore a visible ring for
+   keyboard users (mouse/touch focus stays clean via :focus-visible). */
+a:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 6px;
+}
+/* Screen-reader-only content that becomes visible on focus (skip link). */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip-link:focus { position: fixed; top: 12px; left: 12px; z-index: 60; width: auto; height: auto; margin: 0; clip: auto; white-space: normal;
+  background: #1a2233; border: 1px solid #3b82f6; color: #e2e8f0; padding: 8px 14px; border-radius: 10px; font-size: 14px; }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #27324a; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #37456a; }
+* { scrollbar-width: thin; scrollbar-color: #27324a transparent; }
+
+/* ── Donut chart segments (concentration view) ─────────────────────────── */
+.donut-seg { transition: opacity .15s ease, transform .15s ease; transform-box: fill-box; transform-origin: center; cursor: pointer; }
+.donut-seg.dim { opacity: .3; }
+.donut-seg.pop { transform: scale(1.06); filter: drop-shadow(0 0 4px rgba(0, 0, 0, .4)); }
+
+/* ── Visual depth & polish ──────────────────────────────────────────────── */
+/* A whisper of accent glow at the top gives the flat dark canvas depth without
+   changing the palette. Fixed so it stays put while the page scrolls. */
+body {
+  background-image: radial-gradient(1100px 520px at 50% -8%, rgba(59, 130, 246, .07), transparent 62%);
+  background-attachment: fixed;
+}
+/* Elevate content cards and dialogs (never the sticky header) so panels read as
+   layered surfaces rather than outlined rectangles. */
+main .bg-panel,
+[role="dialog"] > .bg-panel,
+[role="dialog"] .animate-slidein {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 12px 28px -14px rgba(0, 0, 0, .55);
+}
+/* Tabular figures so amounts, USD values and counts line up in columns — the
+   right default for a financial dashboard. */
+.font-mono, #stat-wallets, #stat-value, #stat-events, #stat-networks,
+#event-feed, #wallet-list, #capital-groups, [id$="-body"], [id$="-grid"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Consistent, snappy feedback on every interactive control. */
+button, a, select, input, [role="button"], [data-s-type], [data-wallet], summary {
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, transform .12s ease;
+}
+/* Primary actions get a subtle lift on hover. */
+button.bg-accent:hover, button.bg-purple-600:hover, button.bg-sky-600:hover {
+  box-shadow: 0 6px 18px -6px rgba(59, 130, 246, .5);
+  transform: translateY(-1px);
+}
+
+/* ── Read-only (demo) mode: hide data-mutating controls ────────────────── */
+body.read-only #add-wallet-card,
+body.read-only [data-del] { display: none !important; }
+.ro-badge { display: none; }
+body.read-only .ro-badge { display: inline-flex; align-items: center; gap: 6px;
+  background: #1a2540; border: 1px solid #2c3a5c; color: #9fb0c9; font-size: 11px;
+  padding: 3px 9px; border-radius: 20px; }

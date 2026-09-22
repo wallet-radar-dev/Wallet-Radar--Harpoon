@@ -1,0 +1,19 @@
+[Unit]
+Description=Wallet Radar backfill (Etherscan-fast via backfill2, resumable)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/wallet-tracker/backfill
+EnvironmentFile=-/opt/wallet-tracker/backfill/.backfill.env
+Environment=APP_ROOT=/opt/wallet-tracker
+Environment=CONCURRENCY=4
+Environment=MAX_PAGES=100000
+ExecStart=/opt/wallet-tracker/backfill/target/release/backfill2
+StandardOutput=append:/opt/wallet-tracker/dataset/backfill/run.log
+StandardError=append:/opt/wallet-tracker/dataset/backfill/run.log
+Restart=on-failure
+RestartSec=15
+[Install]
+WantedBy=multi-user.target

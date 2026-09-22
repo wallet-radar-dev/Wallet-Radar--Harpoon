@@ -1,0 +1,31 @@
+# Запуск Wallet Radar у Docker.
+#   docker compose up -d --build        — зібрати й запустити у фоні
+#   docker compose logs -f app          — дивитись логи
+#   docker compose down                 — зупинити
+# Відкрити: http://localhost:3000
+
+services:
+  app:
+    build: .
+    image: wallet-radar
+    container_name: wallet-radar
+    ports:
+      - "3000:3000"
+    # Тут беруться ЛИШЕ власні секрети кора (паролі, TELEGRAM_BOT_TOKEN, SENTRY_DSN).
+    # Ключів до Etherscan/Moralis/LunarCrush/Arkham/Glassnode у .env БІЛЬШЕ НЕМАЄ — їх тримають
+    # сателіти (deploy/docker-compose.satellites.yml + deploy/.env, docs/satellites.md). Цей
+    # контейнер — стара Node-збірка; у проді сервер запускає systemd (wallet-radar-rust.service),
+    # і саме там задано SATELLITE_ENDPOINTS. Піднятий без сателітів, він працюватиме на
+    # безключових джерелах.
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+    volumes:
+      - wallet-data:/data        # збереження data.json між перезапусками
+      - ./dataset:/app/dataset   # живі датасети (скани/моделі) без перезбірки образу
+    restart: unless-stopped
+
+volumes:
+  wallet-data:
