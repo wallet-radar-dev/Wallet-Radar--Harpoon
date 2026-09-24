@@ -1146,13 +1146,19 @@ fn cmd_load() -> Result<()> {
             .map(|v| v.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
 
-        // ETH_TOKENS — це контракти, решта переліків — гаманці
-        let is_tokens = name.contains("TOKEN");
+        // Чи це перелік АКТИВІВ, чи АДРЕС. Перше правило дивилось лише на
+        // слово TOKEN і через це `const STABLES` (контракти стейблів) поїхало
+        // в гаманці. Перелік іменників навмисно явний: вгадувати за формою
+        // адреси не можна — контракт і гаманець виглядають однаково.
+        const ASSET_WORDS: [&str; 6] =
+            ["TOKEN", "STABLE", "MAJOR", "UNIVERSE", "COIN", "ASSET"];
+        let is_tokens = ASSET_WORDS.iter().any(|w| name.contains(w));
         for addr in list {
             if is_tokens {
+                // Символ невідомий — лишаємо NULL. `'?'` виглядало б як факт.
                 tx.execute(
                     "INSERT INTO tokens(chain,contract,symbol,source,verified)
-                     VALUES ('eth',?1,'?',?2,0) ON CONFLICT(chain,contract) DO NOTHING",
+                     VALUES ('eth',?1,NULL,?2,0) ON CONFLICT(chain,contract) DO NOTHING",
                     rusqlite::params![addr, src],
                 )?;
                 tx.execute(
@@ -1275,8 +1281,18 @@ fn cmd_load() -> Result<()> {
         for r in g["rows"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let addr = s(r, "address");
             let label = s(r, "label");
-            let has_flag = r.get("flag").is_some();
-            if has_flag {
+
+            // Токен чи гаманець вирішуємо за ФОРМОЮ ПІДПИСУ, а не за арністю
+            // кортежу. Перша версія вважала пару (адреса, підпис) токеном, а
+            // трійку — гаманцем; через це `const INFRA: [(&str,&str); 10]`
+            // із cexsignal.rs (концентратор мережі, дистрибʼютор, реле)
+            // потрапив у таблицю токенів, а описи стали «символами».
+            let looks_like_symbol = !label.is_empty()
+                && label.len() <= 12
+                && !label.contains(' ')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+            let is_wallet = r.get("flag").is_some() || !looks_like_symbol;
+            if is_wallet {
                 // (адреса, мітка, прапорець) — це гаманці
                 tx.execute(
                     "INSERT INTO wallets(chain,address,kind,label,source,notes)

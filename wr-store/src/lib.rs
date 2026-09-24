@@ -9,8 +9,13 @@
 //! береться один раз на старті процесу.
 
 pub mod addrs;
+pub mod model;
+pub mod tags;
 pub mod mirror;
 pub mod secrets;
+/// Журнал сигналів: єдине місце, де фіксується, що ми стверджували і чим це скінчилось.
+/// Не довідник і не SQLite — навмисне, пояснення в самому модулі.
+pub mod journal;
 
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -31,6 +36,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_init.sql")),
     (2, include_str!("../migrations/002_tags.sql")),
+    (3, include_str!("../migrations/003_symbol_nullable.sql")),
 ];
 
 /// Шлях до файла БД: `WR_DB` або `<DATASET_DIR|.>/wallet-radar.db`.
@@ -116,37 +122,23 @@ pub fn try_snapshot() -> Result<Snapshot> {
     Snapshot::load(&c)
 }
 
-/// Вид «справжніх грошей» для P&L — те, що раніше було `wr_dict::real_money`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Money {
-    Usd,
-    Eth,
-    Matic,
-}
-
-impl Money {
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "usd" => Some(Money::Usd),
-            "eth" => Some(Money::Eth),
-            "matic" => Some(Money::Matic),
-            _ => None,
-        }
-    }
-}
+pub use model::{Money, Role, Token, Wallet, WalletKind};
 
 /// Незмінний зліпок довідників у пам'яті. Береться раз на процес.
 #[derive(Debug, Default)]
 pub struct Snapshot {
-    constants: HashMap<String, (String, String)>, // key -> (value, kind)
-    money: HashMap<(String, String), (Money, u32)>, // (chain, contract) -> (вид, decimals)
-    wallet_kind: HashMap<(String, String), String>,
-    wallet_tags: HashMap<(String, String), Vec<String>>,
-    token_tags: HashMap<String, Vec<String>>, // tag -> контракти
-    wallet_label: HashMap<(String, String), String>,
+    constants: HashMap<String, (String, String)>,
+    /// (chain, contract) -> токен. Один запис, а не три паралельні мапи:
+    /// розсинхронізувати їх між собою вже неможливо.
+    tokens: HashMap<(String, String), Token>,
+    wallets: HashMap<(String, String), Wallet>,
+    /// tag -> ключі у `wallets`. Зберігаємо ключі, а не копії: одна правда.
+    wallet_tags: HashMap<String, Vec<(String, String)>>,
+    token_tags: HashMap<String, Vec<(String, String)>>,
+    /// role -> ключі у `wallets`.
+    roles: HashMap<String, Vec<(String, String)>>,
     strategy_params: HashMap<(String, String), String>,
-    /// Скільки «грошових» токенів довелось пропустити через відсутні decimals.
-    /// Видно через `counts()` — щоб це не було невидимою дірою в обліку.
+    /// Токени з `money_kind`, але без `decimals` — для лічби непридатні.
     money_without_decimals: usize,
 }
 
@@ -163,59 +155,61 @@ impl Snapshot {
         }
 
         let mut q = c.prepare(
-            "SELECT chain, contract, money_kind, decimals FROM tokens WHERE money_kind IS NOT NULL",
+            "SELECT chain, contract, symbol, decimals, sector, money_kind FROM tokens",
         )?;
         for row in q.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-            ))
+            Ok(Token {
+                chain: r.get(0)?,
+                contract: r.get(1)?,
+                symbol: r.get(2)?,
+                decimals: r.get::<_, Option<i64>>(3)?.map(|d| d as u32),
+                sector: r.get(4)?,
+                money: r.get::<_, Option<String>>(5)?.as_deref().and_then(Money::parse),
+            })
         })? {
-            let (chain, contract, mk, dec) = row?;
-            // decimals може бути NULL: частина переліків у коді була просто
-            // множиною контрактів, без десяткових. Для P&L такий запис
-            // непридатний — без decimals сира сума не переводиться в число.
-            // Пропускаємо, але рахуємо: мовчазний пропуск тут означав би
-            // «цей стейбл не гроші», і суми поїхали б без жодного сліду.
-            match (Money::parse(&mk), dec) {
-                (Some(m), Some(d)) => {
-                    s.money.insert((chain, contract), (m, d as u32));
-                }
-                (Some(_), None) => s.money_without_decimals += 1,
-                (None, _) => {}
+            let t = row?;
+            // «гроші» без decimals порахувати не можна — рахуємо й НЕ ховаємо
+            if t.money.is_some() && t.decimals.is_none() {
+                s.money_without_decimals += 1;
             }
+            s.tokens.insert((t.chain.clone(), t.contract.clone()), t);
         }
 
         let mut q = c.prepare("SELECT chain, address, kind, label FROM wallets")?;
         for row in q.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?,
-            ))
+            Ok(Wallet {
+                chain: r.get(0)?,
+                address: r.get(1)?,
+                kind: WalletKind::parse(&r.get::<_, String>(2)?),
+                label: r.get(3)?,
+            })
         })? {
-            let (chain, addr, kind, label) = row?;
-            if let Some(l) = label {
-                s.wallet_label.insert((chain.clone(), addr.clone()), l);
-            }
-            s.wallet_kind.insert((chain, addr), kind);
+            let w = row?;
+            s.wallets.insert((w.chain.clone(), w.address.clone()), w);
         }
 
-        let mut q = c.prepare("SELECT chain, address, tag FROM wallet_tags")?;
+        let mut q = c.prepare("SELECT tag, chain, address FROM wallet_tags")?;
         for row in q.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
         })? {
-            let (chain, addr, tag) = row?;
-            s.wallet_tags.entry((chain, addr)).or_default().push(tag);
+            let (tag, chain, addr) = row?;
+            s.wallet_tags.entry(tag).or_default().push((chain, addr));
         }
 
-        let mut q = c.prepare("SELECT tag, contract FROM token_tags")?;
-        for row in q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-            let (tag, contract) = row?;
-            s.token_tags.entry(tag).or_default().push(contract);
+        let mut q = c.prepare("SELECT tag, chain, contract FROM token_tags")?;
+        for row in q.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })? {
+            let (tag, chain, contract) = row?;
+            s.token_tags.entry(tag).or_default().push((chain, contract));
+        }
+
+        let mut q = c.prepare("SELECT role, chain, address FROM wallet_roles")?;
+        for row in q.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })? {
+            let (role, chain, addr) = row?;
+            s.roles.entry(role).or_default().push((chain, addr));
         }
 
         let mut q = c.prepare("SELECT strategy_id, key, value FROM strategy_params")?;
@@ -227,6 +221,81 @@ impl Snapshot {
         }
 
         Ok(s)
+    }
+
+    /// Перевірка знімка на повноту: кожен тег, який ВЖИВАЄ код, має бути в базі.
+    ///
+    /// Без неї одрук в імені тегу — тиша: запит повертає порожньо, модуль
+    /// вирішує, що перелік порожній, і працює далі. Тут це падає один раз,
+    /// на старті, з переліком того, чого бракує.
+    pub fn validate(&self) -> Result<()> {
+        let mut missing: Vec<&str> = Vec::new();
+        for t in tags::WALLET_TAGS {
+            if !self.wallet_tags.contains_key(*t) {
+                missing.push(t);
+            }
+        }
+        for t in tags::TOKEN_TAGS {
+            if !self.token_tags.contains_key(*t) {
+                missing.push(t);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Other(format!(
+            "у сховищі немає тегів, які вживає код: {}. \
+             Схоже, база завантажена не до кінця — виконай `wr-import load`",
+            missing.join(", ")
+        )))
+    }
+
+    // ── вибірки ─────────────────────────────────────────────────────────────
+
+    fn by_keys<'a, T>(
+        map: &'a HashMap<(String, String), T>,
+        keys: Option<&'a Vec<(String, String)>>,
+    ) -> Vec<&'a T> {
+        keys.map(|ks| ks.iter().filter_map(|k| map.get(k)).collect()).unwrap_or_default()
+    }
+
+    /// Гаманці з тегом. Порожній результат означає «тегу немає або він порожній» —
+    /// щоб відрізнити одне від одного, є `validate()`.
+    pub fn wallets_tagged(&self, tag: &str) -> Vec<&Wallet> {
+        Self::by_keys(&self.wallets, self.wallet_tags.get(tag))
+    }
+
+    /// Токени з тегом.
+    pub fn tokens_tagged(&self, tag: &str) -> Vec<&Token> {
+        Self::by_keys(&self.tokens, self.token_tags.get(tag))
+    }
+
+    /// Гаманці з роллю у розслідуванні.
+    pub fn wallets_with_role(&self, role: Role) -> Vec<&Wallet> {
+        Self::by_keys(&self.wallets, self.roles.get(role.as_str()))
+    }
+
+    /// Чи має адреса тег. Дешевше за `wallets_tagged`, коли потрібна лише перевірка.
+    pub fn has_tag(&self, chain: &str, address: &str, tag: &str) -> bool {
+        let key = (chain.to_string(), address.to_lowercase());
+        self.wallet_tags.get(tag).is_some_and(|v| v.contains(&key))
+    }
+
+    /// Гаманець за адресою.
+    pub fn wallet(&self, chain: &str, address: &str) -> Option<&Wallet> {
+        self.wallets.get(&(chain.to_string(), address.to_lowercase()))
+    }
+
+    /// Токен за контрактом.
+    pub fn token(&self, chain: &str, contract: &str) -> Option<&Token> {
+        self.tokens.get(&(chain.to_string(), contract.to_lowercase()))
+    }
+
+    /// Перший токен із таким символом. `None`, якщо символ невідомий у довіднику.
+    pub fn token_by_symbol(&self, chain: &str, symbol: &str) -> Option<&Token> {
+        self.tokens
+            .values()
+            .find(|t| t.chain == chain && t.symbol.as_deref() == Some(symbol))
     }
 
     /// Поріг/константа як f64. Відсутній ключ — це помилка конфігурації, не нуль:
@@ -251,31 +320,33 @@ impl Snapshot {
             .ok_or_else(|| Error::Other(format!("константи '{key}' немає в базі")))
     }
 
-    /// Заміна `wr_dict::real_money()`.
+    /// «Справжні гроші»: вид і десяткові. `None`, якщо це не гроші АБО
+    /// якщо десяткових не знаємо — рахувати суму в обох випадках не можна.
     pub fn real_money(&self, chain: &str, contract: &str) -> Option<(Money, u32)> {
-        self.money.get(&(chain.to_string(), contract.to_lowercase())).copied()
+        let t = self.token(chain, contract)?;
+        Some((t.money?, t.decimals?))
     }
 
     pub fn wallet_kind(&self, chain: &str, address: &str) -> Option<&str> {
-        self.wallet_kind.get(&(chain.to_string(), address.to_lowercase())).map(|s| s.as_str())
+        self.wallet(chain, address).map(|w| w.kind.as_str())
     }
 
     pub fn wallet_label(&self, chain: &str, address: &str) -> Option<&str> {
-        self.wallet_label.get(&(chain.to_string(), address.to_lowercase())).map(|s| s.as_str())
+        self.wallet(chain, address).and_then(|w| w.label.as_deref())
     }
 
     /// Чи має гаманець тег (членство в іменованому переліку, колишній `const …`).
+    /// Сумісність зі старим ім'ям; віддає перевагу `has_tag`.
     pub fn wallet_has_tag(&self, chain: &str, address: &str, tag: &str) -> bool {
-        self.wallet_tags
-            .get(&(chain.to_string(), address.to_lowercase()))
-            .is_some_and(|v| v.iter().any(|t| t == tag))
+        self.has_tag(chain, address, tag)
     }
 
     /// Контракти з тегом. Порожній перелік — це майже напевно незавантажена база,
     /// тож викликач мусить вирішити, чи це припустимо; мовчки віддавати порожнечу
     /// у логіку, що очікує перелік, не можна.
-    pub fn tokens_with_tag(&self, tag: &str) -> &[String] {
-        self.token_tags.get(tag).map(Vec::as_slice).unwrap_or(&[])
+    /// Контракти з тегом. Для повних записів — `tokens_tagged`.
+    pub fn token_contracts_with_tag(&self, tag: &str) -> Vec<&str> {
+        self.tokens_tagged(tag).into_iter().map(|t| t.contract.as_str()).collect()
     }
 
     pub fn param(&self, strategy: &str, key: &str) -> Result<&str> {
@@ -292,7 +363,7 @@ impl Snapshot {
     }
 
     pub fn counts(&self) -> (usize, usize, usize, usize) {
-        (self.constants.len(), self.money.len(), self.wallet_kind.len(), self.strategy_params.len())
+        (self.constants.len(), self.tokens.len(), self.wallets.len(), self.strategy_params.len())
     }
 
     /// Токени з `money_kind`, але без `decimals` — для P&L непридатні.

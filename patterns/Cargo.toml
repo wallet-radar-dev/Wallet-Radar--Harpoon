@@ -44,3 +44,8 @@ wr-dict = { path = "../wr-dict" }   # спільний словник (єдин�
 
 [profile.release]
 opt-level = 3
+
+# sigretro — ретро-реплей детектора selltape по історії біржі (спільний tape_core).
+[[bin]]
+name = "sigretro"
+path = "src/bin/sigretro.rs"

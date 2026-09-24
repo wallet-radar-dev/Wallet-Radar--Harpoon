@@ -70,3 +70,12 @@ wr-store/seed/
 .env.*
 !.env.example
 deploy/backups/
+
+# Ретро-реплей сигналів: десятки тисяч рядків, які щоразу відтворюються біном sigretro
+# з історії біржі. У git тримаємо ЖИВИЙ журнал (dataset/signals.jsonl) — він неповторний.
+dataset/retro/
+
+# Артефакти збірки БУДЬ-ЯКОГО крейта. Перелік по одному (rust-server/, satellite/, gat/)
+# уже підвів: wr-store/target і patterns/target у ньому не значились, і при першій же
+# спробі закомітити крейт в індекс полізли тисячі файлів .fingerprint.
+target/
