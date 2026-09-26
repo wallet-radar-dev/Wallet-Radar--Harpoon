@@ -35,6 +35,10 @@ import { openDashboard, closeDashboard, renderDashboard, addDashWidget } from ".
 import { openPortfolio, openPortfolioFor, openWalletAddress, closePortfolio, syntheticWallet, getPortfolioWallet, refreshPortfolio, loadWalletReport } from "./portfolio";
 import { nav } from "./nav";
 import { openClusters } from "./clusters";
+import { openTrackRecord } from "./trackrecord";
+import { openBulkCheck } from "./check";
+import { openExitPressure } from "./exitpressure";
+import { initFreshness } from "./freshness";
 import { openEventModal, openGroupAlert, closeEventModal } from "./event-modal";
 import {
   openGraph, closeGraph, openGraphForWallet, openSmartMoney,
@@ -530,6 +534,10 @@ function init(): void {
 
   // Alerts
   updateAlertBadge();
+  void initFreshness();
+  $("#exitpress-btn").addEventListener("click", () => void openExitPressure());
+  $("#bulkcheck-btn").addEventListener("click", () => void openBulkCheck());
+  $("#trackrec-btn").addEventListener("click", () => void openTrackRecord());
   $("#alerts-btn").addEventListener("click", openAlerts);
   $("#alerts-close").addEventListener("click", closeAlerts);
   $("#alerts-backdrop").addEventListener("click", closeAlerts);

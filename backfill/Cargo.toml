@@ -357,3 +357,14 @@ path = "src/dexswap.rs"
 [[bin]]
 name="sigcheck"
 path="src/sigcheck.rs"
+
+# groupwatch — алерт рівня ГРУПИ: зміна наміру групи капіталу щодо активу.
+# Кожен алерт одразу пишеться в журнал сигналів, тож перевіряється автоматично.
+[[bin]]
+name="groupwatch"
+path="src/groupwatch.rs"
+
+# nullbase — нульова база для щоденних сигналів: що дав би випадковий день входу.
+[[bin]]
+name="nullbase"
+path="src/nullbase.rs"

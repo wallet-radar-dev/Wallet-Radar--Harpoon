@@ -109,6 +109,14 @@ mod state;
 mod workers;
 mod routes;
 mod check;
+/// Послужний список сигналів: чи справдились наші власні твердження.
+mod trackrecord;
+/// Тиск на вихід: позиція, виміряна в днях ринкового обороту, а не в доларах.
+mod exitpressure;
+/// Чи це рух ринку, чи біржа перекладає власні монети між своїми гаманцями.
+mod cexmove;
+/// Вік усіх наборів даних одним запитом: тільки метадані файлів, без читання вмісту.
+mod dataages;
 use crate::state::*;
 use crate::workers::*;
 use crate::routes::*;
@@ -629,8 +637,14 @@ async fn main() -> anyhow::Result<()> {
     if std::env::var("ENABLE_LABELS_WORKER").ok().as_deref() == Some("1") {
         let app2 = app.clone();
         tokio::spawn(async move {
-            if app2.labels.len() == 0 {
+            // Порожній АБО старий кеш — обидва випадки вимагають імпорту одразу.
+            // Раніше умовою була лише порожнеча, і 33-денні мітки вважались справними:
+            // воркер вмикали, а перший імпорт відкладався ще на 12 годин. Мітки живлять
+            // назви сутностей усюди, тож «є, але старі» — це не робочий стан.
+            let age = app2.labels.age_secs();
+            if app2.labels.len() == 0 || age < 0 || age > 12 * 3600 {
                 tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                tracing::info!("[labels] кеш віком {age} с — імпортую одразу, не чекаючи циклу");
                 app2.labels.refresh().await;
             }
             loop {
@@ -711,6 +725,22 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/portfolio-strategy", get(portfolio_strategy_route))
         .route("/api/portfolio-backtest", get(portfolio_backtest_route))
         .route("/api/check", get(check::check_route))
+        // Масова перевірка списком: те, чого бракує навіть промисловим розслідувальним
+        // інструментам. Невідомі адреси в зведенні рахуються ОКРЕМО й ніколи не
+        // додаються до «чистих».
+        .route("/api/check/bulk", post(check::check_bulk_route))
+        // Послужний список: чи працювали наші сигнали. Порівняння йде з випадковим
+        // входом у той самий актив, а не з нулем — інакше дрейф активу читався б як едж.
+        .route("/api/track-record", get(trackrecord::route))
+        // Хто роздає позицію, з якої не може вийти: розмір міряється днями обороту,
+        // а не доларами. Позиція з невідомим обсягом не публікується взагалі.
+        .route("/api/exit-pressure", get(exitpressure::route))
+        // Найпоширеніша хиба китових стрічок: біржа пересуває власні монети між
+        // власними гаманцями, а це подається як рух ринку. Адреса без мітки дає
+        // «не знаємо», а не «не біржа».
+        .route("/api/move-check", get(cexmove::route))
+        // Вік усіх наборів: показує, які панелі живляться вимкненими воркерами.
+        .route("/api/data-ages", get(dataages::route))
         .route("/api/openapi.json", get(openapi_route))
         .route("/api/cg-price", get(cg_price_route))
         .route("/api/cg-search", get(cg_search_route))
@@ -800,4 +830,5 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
+
 

@@ -1,104 +1,122 @@
-/* ---------- Tracer: трасування потоків коштів (Arkham-style) ---------- */
+/* ---------- Tracer: трасування потоків коштів ----------
 
-import type { Wallet, EntityType } from "./types";
+   ІСТОРІЯ ЦЬОГО ФАЙЛА. До 24.09.2026 він малював ВИГАДАНИЙ шлях: адреси через
+   randomHex(40), назви контрагентів навмання з довідника, суми через seededRand.
+   Виглядало це точно так само, як справжні екрани поруч, і жодної позначки не мало.
+   При цьому справжній маршрут `/api/money-trace` (пошук у ширину до 15 колін із
+   виявленням депозитів на біржі) існував і вже використовувався графом.
+
+   Тепер тут лише те, що реально знайдено в ланцюгу. Наслідок, який треба прийняти:
+   дані бідніші. API дає суму в доларах і глибину, але не дає мережу й актив для
+   звичайного переказу — тож мережа й актив НЕ показуються ніде, крім виходів на біржу,
+   де вони справді відомі. Порожній результат лишається порожнім: «нічого не знайдено»
+   чесніше за красивий вигаданий ланцюжок. */
+
 import { t } from "./i18n";
-import { $, fmtUsd, fmtNum, shortAddr, randomHex, seededRand } from "./util";
+import { $, fmtUsd, shortAddr } from "./util";
 import { state } from "./state";
 import { escAttr } from "./ui";
-import { priceOf } from "./prices";
-import { networkById, EVM_CHAINS } from "./networks";
-import { arkhamLink, ARKHAM_ENTITIES, ENTITY_TYPE_CLS, ENTITY_HEX, WALLET_HEX } from "./attribution";
+import { getJSON } from "./api";
+import { arkhamLink, ENTITY_TYPE_CLS, ENTITY_HEX, WALLET_HEX } from "./attribution";
 
-
-type TraceAction = "transfer" | "bridge" | "swap" | "cex_deposit";
-
-interface TraceHop {
-  action: TraceAction; toName: string; toKind: "wallet" | "entity"; toEtype: EntityType | null;
-  toAddr: string | null; asset: string; amount: number; value: number; fromNet: string; toNet: string;
+interface TraceEdge { from: string; to: string; usd: number; depth: number }
+interface CexMove { from: string; to: string; exchange: string; asset: string; amount: number; usd: number; depth: number }
+interface MoneyTrace {
+  start: string; depthReached: number; totalNodes: number; edges: number;
+  edgesList: TraceEdge[];
+  cexExits: CexMove[]; cexExitTotalUsd: number;
+  cexWithdrawals: CexMove[]; cexWithdrawalTotalUsd: number;
 }
-
-const ACTION_META: Record<TraceAction, { key: string; icon: string; cls: string }> = {
-  transfer: { key: "action_transfer", icon: "➡", cls: "text-slate-300" },
-  bridge: { key: "action_bridge", icon: "🌉", cls: "text-sky-400" },
-  swap: { key: "action_swap", icon: "🔄", cls: "text-purple-400" },
-  cex_deposit: { key: "action_cex", icon: "🏦", cls: "text-yellow-400" },
-};
 
 let tracerWid: string | null = null;
 
-function buildTrace(w: Wallet): TraceHop[] {
-  const rnd = seededRand("trace:" + w.address);
-  const hops: TraceHop[] = [];
-  let curNet = w.networks[0];
-  let asset = w.holdings[0]?.asset ?? networkById(curNet).symbol;
-  let amount = (w.holdings[0]?.amount ?? 100) * (0.15 + rnd() * 0.4);
-  const cex = ["Binance", "Coinbase", "OKX", "Kraken"];
-  const steps = 4 + Math.floor(rnd() * 3);
-  for (let i = 0; i < steps; i++) {
-    const last = i === steps - 1;
-    const roll = rnd();
-    let action: TraceAction = last ? "cex_deposit" : roll < 0.22 ? "bridge" : roll < 0.42 ? "swap" : roll < 0.6 ? "cex_deposit" : "transfer";
-    let toNet = curNet;
-    if (action === "bridge") {
-      const opts = EVM_CHAINS.filter((c) => c !== curNet);
-      toNet = opts[Math.floor(rnd() * opts.length)];
-    }
-    if (action === "swap") asset = ["USDT", "USDC", "ETH", "WBTC"][Math.floor(rnd() * 4)];
-
-    let toName: string, toKind: "wallet" | "entity", toEtype: EntityType | null;
-    const toAddr = "0x" + randomHex(40);
-    if (action === "cex_deposit") {
-      toName = cex[Math.floor(rnd() * cex.length)]; toKind = "entity"; toEtype = "cex";
-    } else if (rnd() < 0.4) {
-      const e = ARKHAM_ENTITIES[Math.floor(rnd() * ARKHAM_ENTITIES.length)];
-      toName = e.name; toKind = "entity"; toEtype = e.type;
-    } else {
-      toName = shortAddr(toAddr); toKind = "wallet"; toEtype = null;
-    }
-    amount *= 0.8 + rnd() * 0.17;
-    hops.push({ action, toName, toKind, toEtype, toAddr, asset, amount, value: amount * (priceOf(asset) || 0), fromNet: curNet, toNet });
-    curNet = toNet;
+/** Головний шлях грошей: з кожного коліна беремо найбільший за сумою перехід,
+    що виходить із уже досягнутих адрес. Це не «єдиний правильний» шлях, а найважчий
+    за грошима — і підпис під списком каже саме це, щоб його не читали як доказ. */
+function mainPath(d: MoneyTrace): TraceEdge[] {
+  const reached = new Set<string>([d.start.toLowerCase()]);
+  const path: TraceEdge[] = [];
+  const byDepth = new Map<number, TraceEdge[]>();
+  for (const e of d.edgesList || []) {
+    const arr = byDepth.get(e.depth) || [];
+    arr.push(e);
+    byDepth.set(e.depth, arr);
   }
-  return hops;
+  const depths = [...byDepth.keys()].sort((a, b) => a - b);
+  for (const dp of depths) {
+    const cand = (byDepth.get(dp) || [])
+      .filter((e) => reached.has(e.from.toLowerCase()))
+      .sort((a, b) => b.usd - a.usd)[0];
+    if (!cand) break;
+    path.push(cand);
+    reached.add(cand.to.toLowerCase());
+    if (path.length >= 12) break;
+  }
+  return path;
 }
 
-function buildTraceHtml(w: Wallet): string {
-  const net0 = networkById(w.networks[0]);
-  const hops = buildTrace(w);
+function hopRow(e: TraceEdge, cex: CexMove | undefined, last: boolean): string {
+  const isCex = !!cex;
+  const color = isCex ? ENTITY_HEX["cex"] : WALLET_HEX;
+  const title = isCex
+    ? `${escAttr(cex!.exchange)} <span class="px-1.5 py-0.5 rounded ${ENTITY_TYPE_CLS["cex"]} text-[10px]">${t("entity_cex")}</span>`
+    : shortAddr(e.to);
+  // Актив показуємо лише там, де він справді відомий — на виході на біржу.
+  const amount = isCex && cex!.asset
+    ? `${cex!.amount ? cex!.amount.toLocaleString(undefined, { maximumFractionDigits: 3 }) + " " + escAttr(cex!.asset) + " · " : ""}${fmtUsd(cex!.usd || e.usd)}`
+    : fmtUsd(e.usd);
+  return `
+    <div class="relative pl-7">
+      <div class="absolute left-[9px] top-0 ${last ? "h-4" : "bottom-0"} w-px bg-edge"></div>
+      <div class="absolute left-1 top-4 w-3 h-3 rounded-full ring-2 ring-panel" style="background:${color}"></div>
+      <div class="pb-4 pt-1.5">
+        <div class="text-[11px] ${isCex ? "text-yellow-400" : "text-slate-400"} flex items-center gap-1.5">
+          ${isCex ? "🏦 " + t("action_cex") : "➡ " + t("action_transfer")} · ${t("tracer_hop")} ${e.depth}
+        </div>
+        <div class="flex items-center justify-between gap-2 mt-0.5">
+          <span class="font-medium truncate cursor-pointer hover:text-accent" data-wallet-addr="${escAttr(e.to)}">${title}</span>
+          <span class="text-xs text-slate-400 shrink-0">${amount}</span>
+        </div>
+        <div class="flex gap-2">
+          <button data-wallet-addr="${escAttr(e.to)}" class="text-[11px] text-accent hover:underline">📊 ${t("pf_open")}</button>
+          <a href="${arkhamLink(e.to)}" target="_blank" rel="noopener" class="text-[11px] text-purple-400 hover:underline">🔍 Arkham →</a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderTrace(d: MoneyTrace, label: string, address: string): string {
   const source = `
-    <div data-wallet-addr="${escAttr(w.address)}" class="flex items-center gap-3 bg-panel2 border border-edge rounded-xl p-3 cursor-pointer hover:border-accent transition">
+    <div data-wallet-addr="${escAttr(address)}" class="flex items-center gap-3 bg-panel2 border border-edge rounded-xl p-3 cursor-pointer hover:border-accent transition">
       <span class="w-3 h-3 rounded-full shrink-0" style="background:${WALLET_HEX}"></span>
       <div class="min-w-0">
         <div class="text-[11px] text-slate-400">${t("tracer_source")}</div>
-        <div class="font-medium truncate">${w.label || shortAddr(w.address)}</div>
-        <div class="font-mono text-[11px] text-slate-500 truncate">${shortAddr(w.address)} · <span class="${net0.color}">${net0.name}</span></div>
+        <div class="font-medium truncate">${escAttr(label)}</div>
+        <div class="font-mono text-[11px] text-slate-500 truncate">${shortAddr(address)}</div>
       </div>
     </div>`;
 
-  const steps = hops.map((h, i) => {
-    const am = ACTION_META[h.action];
-    const fromNet = networkById(h.fromNet), toNet = networkById(h.toNet);
-    const chain = h.action === "bridge"
-      ? `<span class="${fromNet.color}">${fromNet.name}</span> → <span class="${toNet.color}">${toNet.name}</span>`
-      : `<span class="${toNet.color}">${toNet.name}</span>`;
-    const color = h.toKind === "wallet" ? WALLET_HEX : ENTITY_HEX[h.toEtype ?? "unknown"];
-    const badge = h.toKind === "entity" && h.toEtype ? `<span class="px-1.5 py-0.5 rounded ${ENTITY_TYPE_CLS[h.toEtype]} text-[10px]">${t(`entity_${h.toEtype}`)}</span>` : "";
-    return `
-      <div class="relative pl-7">
-        <div class="absolute left-[9px] top-0 ${i === hops.length - 1 ? "h-4" : "bottom-0"} w-px bg-edge"></div>
-        <div class="absolute left-1 top-4 w-3 h-3 rounded-full ring-2 ring-panel" style="background:${color}"></div>
-        <div class="pb-4 pt-1.5">
-          <div class="text-[11px] ${am.cls} flex items-center gap-1.5">${am.icon} ${t(am.key)} · ${chain}</div>
-          <div class="flex items-center justify-between gap-2 mt-0.5">
-            <span class="font-medium truncate ${h.toAddr ? "cursor-pointer hover:text-accent" : ""}"${h.toAddr ? ` data-wallet-addr="${escAttr(h.toAddr)}"` : ""}>${h.toName} ${badge}</span>
-            <span class="text-xs text-slate-400 shrink-0">${fmtNum(h.amount, 3)} ${h.asset}${h.value ? ` · ${fmtUsd(h.value)}` : ""}</span>
-          </div>
-          ${h.toAddr ? `<div class="flex gap-2"><button data-wallet-addr="${escAttr(h.toAddr)}" class="text-[11px] text-accent hover:underline">📊 ${t("pf_open")}</button><a href="${arkhamLink(h.toAddr)}" target="_blank" rel="noopener" class="text-[11px] text-purple-400 hover:underline">🔍 Arkham →</a></div>` : ""}
-        </div>
-      </div>`;
-  }).join("");
+  const stats = `
+    <div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 mt-2">
+      <span>${t("tracer_nodes")}: <span class="text-slate-200">${d.totalNodes}</span></span>
+      <span>${t("tracer_edges")}: <span class="text-slate-200">${d.edges}</span></span>
+      <span>${t("tracer_depth")}: <span class="text-slate-200">${d.depthReached}</span></span>
+      ${d.cexExitTotalUsd ? `<span>${t("tracer_cexout")}: <span class="text-bad">${fmtUsd(d.cexExitTotalUsd)}</span></span>` : ""}
+      ${d.cexWithdrawalTotalUsd ? `<span>${t("tracer_cexin")}: <span class="text-good">${fmtUsd(d.cexWithdrawalTotalUsd)}</span></span>` : ""}
+    </div>`;
 
-  return `${source}<div class="mt-4">${steps}</div><div class="text-[11px] text-slate-500">${t("tracer_hint")}</div>`;
+  const path = mainPath(d);
+  if (!path.length) {
+    // Порожньо — так і кажемо. Раніше на цьому місці малювався вигаданий ланцюг.
+    return source + stats + `<div class="text-slate-400 text-sm py-6 text-center">${t("tracer_none")}</div>`;
+  }
+
+  const cexByTo = new Map<string, CexMove>();
+  for (const c of d.cexExits || []) cexByTo.set(c.to.toLowerCase(), c);
+
+  const steps = path.map((e, i) => hopRow(e, cexByTo.get(e.to.toLowerCase()), i === path.length - 1)).join("");
+  return source + stats + `<div class="mt-4">${steps}</div>
+    <div class="text-[11px] text-slate-500">${t("tracer_mainpath")}</div>`;
 }
 
 function populateTracerWalletSelect(): void {
@@ -107,14 +125,21 @@ function populateTracerWalletSelect(): void {
   if (tracerWid) sel.value = tracerWid;
 }
 
-export function openTracer(wid?: string): void {
+export async function openTracer(wid?: string): Promise<void> {
   const w = wid ? state.wallets.find((x) => x.id === wid) : state.wallets[0];
   if (!w) return;
   tracerWid = w.id;
   populateTracerWalletSelect();
-  $("#tracer-body").innerHTML = buildTraceHtml(w);
+  const body = $("#tracer-body");
   const modal = $("#tracer-modal");
   modal.classList.remove("hidden"); modal.classList.add("flex");
+  body.innerHTML = `<div class="text-slate-400 text-sm py-8 text-center">${t("mt_loading")}</div>`;
+  try {
+    const d = await getJSON<MoneyTrace>("/api/money-trace", { address: w.address, depth: 15 });
+    body.innerHTML = renderTrace(d, w.label || shortAddr(w.address), w.address);
+  } catch {
+    body.innerHTML = `<div class="text-bad text-sm py-8 text-center">${t("tracer_err")}</div>`;
+  }
 }
 
 export function closeTracer(): void {
@@ -123,8 +148,7 @@ export function closeTracer(): void {
   modal.classList.add("hidden"); modal.classList.remove("flex");
 }
 
-
 /** Перемалювати трасування під поточний гаманець (напр., після зміни мови). */
 export function refreshTracer(): void {
-  if (tracerWid) openTracer(tracerWid);
+  if (tracerWid) void openTracer(tracerWid);
 }

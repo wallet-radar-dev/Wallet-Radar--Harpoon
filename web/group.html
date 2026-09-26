@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wallet Radar — граф групи капіталу</title>
+<style>
+  :root{
+    --bg:#0b0f16; --panel:#111826; --line:#1e2940; --ink:#e8eefc; --mut:#8b9ab8;
+    --hub:#4c8dff; --spoke:#f0a832; --bridge:#37e0c8; --peer:#7c8aa8; --orphan:#3a465e; --hot:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif;overflow:hidden}
+  #cv{position:fixed;inset:0;cursor:grab}
+  #cv:active{cursor:grabbing}
+  .pane{position:fixed;background:rgba(17,24,38,.94);border:1px solid var(--line);
+    border-radius:10px;backdrop-filter:blur(6px)}
+  #top{top:12px;left:12px;padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #top select,#top input{background:#0c1220;color:var(--ink);border:1px solid var(--line);
+    border-radius:6px;padding:5px 8px;font:inherit}
+  #top b{font-weight:650}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}
+  #legend{bottom:12px;left:12px;padding:10px 12px;font-size:12px}
+  #legend div{display:flex;align-items:center;gap:7px;margin:3px 0;color:var(--mut)}
+  .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  #card{top:12px;right:12px;width:310px;padding:14px;display:none}
+  #card h3{margin:0 0 8px;font-size:13px;font-family:ui-monospace,monospace;color:var(--hub);word-break:break-all}
+  #card table{width:100%;border-collapse:collapse;font-size:12.5px}
+  #card td{padding:3px 0;border-bottom:1px solid var(--line)}
+  #card td:last-child{text-align:right;font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  #card tr:last-child td{border-bottom:none}
+  .muted{color:var(--mut)}
+  #cov{bottom:12px;right:12px;padding:10px 12px;font-size:12px;color:var(--mut);max-width:330px}
+  #cov b{color:var(--ink)}
+  #hint{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div class="pane" id="top">
+  <b>Група</b>
+  <select id="g"></select>
+  <label class="muted">вузлів</label>
+  <input id="lim" type="number" value="600" min="50" max="4000" step="50" style="width:78px">
+  <span id="stat" class="mono muted"></span>
+</div>
+
+<div class="pane" id="legend">
+  <div><i class="dot" style="background:var(--hub)"></i> концентратор — від нього розходиться кільце</div>
+  <div><i class="dot" style="background:var(--spoke)"></i> кільце — заправлені ним адреси</div>
+  <div><i class="dot" style="background:var(--bridge)"></i> міст — тримає два кільця разом</div>
+  <div><i class="dot" style="background:var(--peer)"></i> звичайний вузол</div>
+  <div><i class="dot" style="background:var(--orphan)"></i> без ребер усередині групи</div>
+  <div style="margin-top:7px;border-top:1px solid var(--line);padding-top:7px">
+    <span style="color:#4c8dff">&#10230;</span>&nbsp; стрілка — чистий напрям потоку</div>
+  <div><span style="color:#7c8aa8">&#9472;&#9472;</span>&nbsp; блідо й без стрілки — прогін туди-назад</div>
+</div>
+
+<div class="pane" id="card"></div>
+<div class="pane" id="cov"></div>
+<div id="hint">колесо — масштаб · тягнути — рухати · клік на вузол — картка</div>
+
+<script>
+const cv = document.getElementById('cv'), cx = cv.getContext('2d');
+let W=0, H=0, DPR=Math.min(devicePixelRatio||1, 2);
+function resize(){ W=innerWidth; H=innerHeight; cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px'; cx.setTransform(DPR,0,0,DPR,0,0); }
+addEventListener('resize', ()=>{resize(); draw();}); resize();
+
+const COL={hub:'#4c8dff', spoke:'#f0a832', bridge:'#37e0c8', peer:'#7c8aa8', orphan:'#3a465e'};
+let N=[], E=[], view={x:0,y:0,k:1}, sel=null, hover=null;
+
+const fmtUsd = v => v>=1e9?'$'+(v/1e9).toFixed(2)+' млрд' : v>=1e6?'$'+(v/1e6).toFixed(2)+' млн'
+                 : v>=1e3?'$'+(v/1e3).toFixed(1)+' тис.' : '$'+v.toFixed(0);
+
+/* Розкладка навмисно НЕ випадкова: концентратори сідають по колу, а кожне
+   кільце — навколо свого концентратора. Так структура читається з першого
+   погляду, а не після хвилини розплутування силами. */
+function layout(){
+  const hubs = N.filter(n=>n.role==='hub');
+  const R = Math.min(W,H)*0.34;
+  hubs.forEach((h,i)=>{
+    const a = i/Math.max(hubs.length,1)*Math.PI*2 - Math.PI/2;
+    h.x = Math.cos(a)*R; h.y = Math.sin(a)*R; h.fixed = true;
+  });
+  const byHub = new Map(hubs.map(h=>[h.a,[]]));
+  const hubSet = new Set(hubs.map(h=>h.a));
+  const owner = new Map();
+  for (const e of E){
+    if (hubSet.has(e.s) && !hubSet.has(e.t)) { if(!owner.has(e.t)||owner.get(e.t)[1]<e.eth) owner.set(e.t,[e.s,e.eth]); }
+    if (hubSet.has(e.t) && !hubSet.has(e.s)) { if(!owner.has(e.s)||owner.get(e.s)[1]<e.eth) owner.set(e.s,[e.t,e.eth]); }
+  }
+  const free=[];
+  for (const n of N){
+    if (n.role==='hub') continue;
+    const o = owner.get(n.a);
+    if (o && byHub.has(o[0])) byHub.get(o[0]).push(n); else free.push(n);
+  }
+  for (const [ha, kids] of byHub){
+    const h = N.find(n=>n.a===ha); if(!h) continue;
+    kids.sort((a,b)=>b.usd-a.usd);
+    const rings = Math.ceil(kids.length/34);
+    kids.forEach((n,i)=>{
+      const ring = Math.floor(i/34), inRing = i%34, per = Math.min(34, kids.length-ring*34);
+      const rr = 46 + ring*24;
+      const a = inRing/per*Math.PI*2 + ring*0.2;
+      n.x = h.x + Math.cos(a)*rr; n.y = h.y + Math.sin(a)*rr;
+    });
+  }
+  free.forEach((n,i)=>{
+    const a = i/Math.max(free.length,1)*Math.PI*2;
+    const rr = R*1.55 + (i%7)*11;
+    n.x = Math.cos(a)*rr; n.y = Math.sin(a)*rr;
+  });
+}
+
+function draw(){
+  cx.clearRect(0,0,W,H);
+  cx.save();
+  cx.translate(W/2+view.x, H/2+view.y); cx.scale(view.k, view.k);
+  const pos = new Map(N.map(n=>[n.a,n]));
+
+  const maxEth = Math.max(1, ...E.map(e=>e.eth));
+  for (const e of E){
+    const a=pos.get(e.s), b=pos.get(e.t); if(!a||!b) continue;
+    const hot = sel && (e.s===sel.a || e.t===sel.a);
+    /* Симетричне ребро (туди й назад майже однаково) — це прогін обсягу,
+       а не заправка. Малюємо його блідим і БЕЗ стрілки: напрямку там немає,
+       і вигадувати його стрілкою було б брехнею на картинці. */
+    const churn = e.sym > 0.75;
+    cx.strokeStyle = hot ? 'rgba(239,68,68,.85)'
+                   : churn ? 'rgba(124,138,168,.14)' : 'rgba(76,141,255,.20)';
+    cx.lineWidth = hot ? 1.6/view.k : Math.max(.35, Math.sqrt(e.eth/maxEth)*2.2)/view.k;
+    cx.beginPath(); cx.moveTo(a.x,a.y); cx.lineTo(b.x,b.y); cx.stroke();
+
+    if (!churn && view.k > 0.45){
+      const dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy);
+      if (len > 14){
+        const ux=dx/len, uy=dy/len;
+        const br=(b._r||4)+1.5;                 // вістря не заходить у вузол
+        const tipx=b.x-ux*br, tipy=b.y-uy*br;
+        const sz=Math.max(3.2, Math.min(7, e.eth/maxEth*16))/view.k;
+        cx.beginPath();
+        cx.moveTo(tipx, tipy);
+        cx.lineTo(tipx-ux*sz*2 + uy*sz, tipy-uy*sz*2 - ux*sz);
+        cx.lineTo(tipx-ux*sz*2 - uy*sz, tipy-uy*sz*2 + ux*sz);
+        cx.closePath();
+        cx.fillStyle = hot ? 'rgba(239,68,68,.95)' : 'rgba(76,141,255,.55)';
+        cx.fill();
+      }
+    }
+  }
+  const maxUsd = Math.max(1, ...N.map(n=>n.usd));
+  for (const n of N){
+    const base = n.role==='hub' ? 7 : 3.4;
+    const r = base + (n.usd>0 ? Math.sqrt(n.usd/maxUsd)*7 : 0);
+    cx.beginPath(); cx.arc(n.x, n.y, r, 0, 7);
+    cx.fillStyle = COL[n.role]||COL.peer; cx.fill();
+    if (sel && n.a===sel.a){ cx.strokeStyle='#fff'; cx.lineWidth=2/view.k; cx.stroke(); }
+    n._r = r;
+  }
+  /* Підписи лише на концентраторах і лише коли є місце: підписати все —
+     значить не підписати нічого. Джерело підпису власне, не з оглядача. */
+  if (view.k > 0.5){
+    cx.textAlign='center'; cx.textBaseline='bottom';
+    for (const n of N){
+      if (n.role!=='hub' || !n.label) continue;
+      const fs = Math.min(13, 11/view.k);
+      cx.font = '600 '+fs+'px ui-monospace,Consolas,monospace';
+      const w = cx.measureText(n.label).width;
+      const y = n.y - (n._r||7) - 5/view.k;
+      cx.fillStyle='rgba(11,15,22,.82)';
+      cx.fillRect(n.x-w/2-3/view.k, y-fs, w+6/view.k, fs+3/view.k);
+      cx.fillStyle='#cddcff';
+      cx.fillText(n.label, n.x, y+1/view.k);
+    }
+  }
+  cx.restore();
+}
+
+function pick(mx,my){
+  const x=(mx-W/2-view.x)/view.k, y=(my-H/2-view.y)/view.k;
+  let best=null, bd=1e9;
+  for(const n of N){ const d=(n.x-x)**2+(n.y-y)**2; if(d<bd && d < ((n._r||4)+5)**2){bd=d;best=n;} }
+  return best;
+}
+
+function showCard(n){
+  const c=document.getElementById('card');
+  if(!n){ c.style.display='none'; return; }
+  const role={hub:'концентратор',spoke:'кільце',bridge:'міст',peer:'вузол',orphan:'без ребер'}[n.role]||n.role;
+  const na = v => v>0 ? v : null;
+  c.innerHTML = '<h3>'+n.a+'</h3><table>'
+    + row('Роль у структурі', role)
+    + row('Сутність', n.label ? n.label : '<span class="muted">не визначено</span>')
+    + row('Зв’язків у групі', n.deg)
+    + row('Обіг по ребрах', n.ethVol.toLocaleString('uk')+' ETH')
+    + row('Баланс', na(n.usd)? fmtUsd(n.usd) : '<span class="muted">немає профілю</span>')
+    + row('З них ETH', na(n.ethUsd)? fmtUsd(n.ethUsd) : '—')
+    + row('З них токени', na(n.tokUsd)? fmtUsd(n.tokUsd) : '—')
+    + row('Токенів', n.nTok||'<span class="muted">—</span>')
+    + row('Сер. ціна входу', na(n.avgBuyUsd)? '$'+n.avgBuyUsd : '<span class="muted">невідомо</span>')
+    + row('Сер. ціна виходу', na(n.avgSellUsd)? '$'+n.avgSellUsd : '<span class="muted">невідомо</span>')
+    + '</table>';
+  c.style.display='block';
+}
+const row=(k,v)=>'<tr><td class="muted">'+k+'</td><td>'+v+'</td></tr>';
+
+let drag=null;
+cv.addEventListener('mousedown',e=>drag={x:e.clientX,y:e.clientY,vx:view.x,vy:view.y,moved:false});
+addEventListener('mousemove',e=>{ if(!drag) return; view.x=drag.vx+(e.clientX-drag.x); view.y=drag.vy+(e.clientY-drag.y);
+  if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3) drag.moved=true; draw(); });
+addEventListener('mouseup',e=>{ if(drag && !drag.moved){ sel=pick(e.clientX,e.clientY); showCard(sel); draw(); } drag=null; });
+cv.addEventListener('wheel',e=>{ e.preventDefault(); const k=view.k*(e.deltaY<0?1.12:1/1.12);
+  view.k=Math.min(6,Math.max(.15,k)); draw(); },{passive:false});
+
+async function load(){
+  const id=document.getElementById('g').value, lim=document.getElementById('lim').value;
+  document.getElementById('stat').textContent='збираю…';
+  const r=await fetch('/api/group-graph?id='+encodeURIComponent(id)+'&limit='+lim);
+  const d=await r.json();
+  if(d.error){ document.getElementById('stat').textContent=d.error; return; }
+  N=d.nodes; E=d.edges; sel=null; showCard(null);
+  layout(); view={x:0,y:0,k:1}; draw();
+  const R=d.roles;
+  document.getElementById('stat').textContent =
+    N.length+' вузлів · '+E.length+' ребер · концентраторів '+(R.hub||0);
+  const c=d.coverage;
+  document.getElementById('cov').innerHTML =
+    'У складі групи <b>'+c.membersTotal.toLocaleString('uk')+'</b> адрес. '+
+    'Хоч одне ребро всередині групи мають <b>'+c.membersWithEdges.toLocaleString('uk')+'</b>. '+
+    'На екрані <b>'+c.membersShown.toLocaleString('uk')+'</b>, профіль капіталу є в <b>'+c.withEconomics+'</b>.<br><br>'+
+    '<span class="muted">Різниця цих чисел — не спрощення картинки, а стан даних: '+
+    'частина складу груп не має транзакцій узагалі.<br><br>'+
+    'Підписи сутностей — з власної поведінкової класифікації, не з міток стороннього оглядача.</span>';
+}
+
+(async function init(){
+  const r=await fetch('/api/capital-groups');
+  const d=await r.json();
+  const gs=(d.groups||[]).filter(g=>g.size>=20)
+    .sort((a,b)=>(b.totalUsd||0)-(a.totalUsd||0));
+  const sel=document.getElementById('g');
+  sel.innerHTML=gs.map(g=>'<option value="'+g.id+'">'+g.id+' — '+g.size.toLocaleString('uk')+' адрес</option>').join('');
+  sel.onchange=load; document.getElementById('lim').onchange=load;
+  // Група з адреси: ?id=NET. Потрібно, щоб на цю сторінку можна було ПОСЛАТИ —
+  // досі сюди не вело жодне посилання з застосунку, і відкривалась вона лише
+  // вручну набраною адресою. Невідомий id мовчки лишає вибір за замовчуванням.
+  const want=new URLSearchParams(location.search).get('id');
+  if(want && gs.some(g=>g.id===want)) sel.value=want;
+  await load();
+})();
+</script>
+</body>
+</html>
