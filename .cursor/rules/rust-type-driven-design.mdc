@@ -1,0 +1,20 @@
+---
+description: Rust type-driven design and ownership rules learned from Rustcamp reviews
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Type-driven Rust
+
+- State domain invariants before implementation; enforce meaningful invariants in constructors.
+- Newtypes constrain data; they do not merely organize it. Avoid wrap-then-destructure ceremony.
+- Parse strings at boundaries into `Url`, enums, addresses, IDs, and other validated types.
+- Use exhaustive enum matches. Avoid wildcard arms where a new variant should fail compilation.
+- Generic in, concrete out. Add only trait bounds the implementation uses.
+- Use `&str`/`AsRef<str>` to read, `Into<String>` to store, and `Cow` only for real borrow-or-own APIs.
+- Validate before allocating; avoid duplicate `Vec`/`String`/`HashSet` construction and needless clones.
+- Prefer `From`/`TryFrom` for conversions. Return `Result` when failure reason matters.
+- Use `thiserror` in libraries and contextual `anyhow` in binaries; preserve source chains.
+- No new `unwrap`/`expect`/`panic!` in libraries, handlers, parsers, or workers.
+- No `unsafe` without approval and a documented `// SAFETY:` invariant.
+

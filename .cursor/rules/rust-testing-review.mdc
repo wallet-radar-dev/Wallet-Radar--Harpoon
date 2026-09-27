@@ -1,0 +1,19 @@
+---
+description: Rust testing, parity, and PR review requirements
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Tests and review
+
+- New behavior includes tests; bug fixes begin with a failing reproducer.
+- Test boundary values, malformed input, empty sets, duplicates, ordering, and errors.
+- Keep pure calculations separate from I/O; use table-driven tests for analytics.
+- Use property tests for parsers and invariant-heavy transformations when valuable.
+- Preserve golden fixtures and byte-level Node/Rust parity where established.
+- Do not regenerate golden output merely to hide a regression; explain intentional changes.
+- For each affected crate run `cargo fmt --check`, strict Clippy, and all-feature tests.
+- Run `npm test` for parser/golden changes and `parity_check` for covered API behavior.
+- Review allocations/clones, trait bounds, lock scope, failure policy, and secret exposure.
+- Keep diffs focused; exclude IDE files, build outputs, credentials, and unrelated formatting.
+
