@@ -1,0 +1,19 @@
+---
+description: Async, backend, persistence, and observability practices for Rust code
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Async and backend rules
+
+- Keep bins and `main` as composition roots; extract logic into small testable functions.
+- Validate transport/config input at the edge; domain logic should not depend on Axum or DB types.
+- Do not block Tokio. Use async I/O or `spawn_blocking` for sync I/O and CPU-heavy work.
+- Never hold a `std::sync` guard across `.await`; minimize lock scope and audit lock order.
+- Give worker errors an explicit retry, skip, degrade, or terminate policy.
+- Use structured `tracing` fields; do not use `println!` in services or log secrets.
+- Use UTC-aware timestamps. Seed randomness and remove wall-clock dependence in tests.
+- Parameterize SQL and use transactions for multi-statement invariants.
+- Keep provider calls behind the satellite boundary; do not add API keys to core config.
+- Return stable typed client errors without leaking internal causes or credentials.
+

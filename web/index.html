@@ -64,6 +64,18 @@
           class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
           <span aria-hidden="true">📊</span><span data-i18n="dash_btn"></span>
         </button>
+        <button type="button" id="exitpress-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">🚪</span><span data-i18n="ep_btn"></span>
+        </button>
+        <button type="button" id="bulkcheck-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">📋</span><span data-i18n="bulk_btn"></span>
+        </button>
+        <button type="button" id="trackrec-btn"
+          class="inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">📒</span><span data-i18n="tr_btn"></span>
+        </button>
         <button type="button" id="alerts-btn"
           class="relative inline-flex items-center gap-1.5 bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
           <span aria-hidden="true">🔔</span><span data-i18n="alerts_btn"></span>
@@ -81,6 +93,8 @@
             <option value="ru">Русский</option>
           </select>
         </div>
+        <!-- Вік даних: індикатор наповнює freshness.ts із /api/workers-health -->
+        <span id="freshness" class="inline-flex"></span>
         <span id="price-indicator" class="hidden sm:inline text-xs text-slate-400" title=""></span>
         <div class="flex items-center gap-2">
           <span id="conn-dot" class="w-2.5 h-2.5 rounded-full bg-good pulse-dot" aria-hidden="true"></span>
@@ -419,3 +433,4 @@
   <script src="app.js?v=e2c65736"></script>
 </body>
 </html>
+

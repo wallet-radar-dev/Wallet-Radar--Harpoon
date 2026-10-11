@@ -1,0 +1,16 @@
+---
+description: Wallet Radar architecture, security boundaries, and sources of truth
+alwaysApply: true
+---
+
+# Architecture boundaries
+
+- Rust is production. `server/` is legacy Node retained only as a parity oracle.
+- `rust-server/` owns HTTP/WS behavior. Preserve API and golden-fixture compatibility.
+- Provider credentials belong only in `satellite/`; core calls keyed APIs over mTLS.
+- Keep the satellite provider allowlist strict. Never accept arbitrary upstream hosts.
+- Reference data and operational parameters belong in `wr-store`/SQLite, not code.
+- `proto/satellite.proto` is authoritative; never hand-edit generated gRPC code.
+- Do not commit `.env`, credentials, PKI output, live datasets, or private reports.
+- Avoid broad rewrites. This repository has many binaries and parity-sensitive paths.
+

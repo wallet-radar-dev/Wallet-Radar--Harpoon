@@ -120,8 +120,27 @@ pub async fn ml_mature_tick() {
 
 /// forensics-worker.js `fundersOf` — who funded this holder, across every chain we
 /// index. Exchanges are excluded: a Binance hot wallet "funds" half of Ethereum.
+/// Мережі, у яких шукаємо фондувальників.
+///
+/// Типово п'ять, а не всі 24. ПРИЧИНА ЗАМІРЯНА: у логах обхід екзотичних мереж
+/// (lisk, immutable, redstone, zora, rootstock, fuse…) майже завжди повертає
+/// «0 transfers», але кожна з них — окреме звернення, і разом вони з'їдають більшість
+/// часу. При 50 холдерах на актив це різниця між хвилиною і чвертю години.
+///
+/// ЦІНА РІШЕННЯ, ЯКУ ТРЕБА ЗНАТИ: спільний фондувальник, що працював лише в
+/// незібраній мережі, тепер не знайдеться. Перелік розширюється через
+/// `FORENSICS_FUNDER_CHAINS`, якщо колись знадобиться повний обхід.
+fn forensics_funder_chains() -> Vec<String> {
+    std::env::var("FORENSICS_FUNDER_CHAINS")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>())
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .unwrap_or_else(|| ["eth", "base", "arbitrum", "optimism", "polygon"].iter().map(|s| s.to_string()).collect())
+}
+
 pub async fn funders_of(addr: &str) -> Value {
-    let per = join_all(bs::bs_chains().iter().map(|c| async move { (*c, bs::native_transfers(c, addr, 3).await) })).await;
+    let chains = forensics_funder_chains();
+    let per = join_all(chains.iter().map(|c| async move { (c.as_str(), bs::native_transfers(c, addr, 3).await) })).await;
     let mut by_f: serde_json::Map<String, Value> = serde_json::Map::new();
     for (chain, trs) in per {
         for t in &trs {
@@ -186,17 +205,45 @@ pub async fn forensics_tick(app: &Arc<App>) {
     }
     tracing::info!("[forensics] цикл стартує: {} активів на обхід", whales.len());
 
+    // ОБСЯГ НА ЦИКЛ. Один актив коштує ~1700 звернень: 50 холдерів, і для кожного обхід
+    // фондувальників (17 мереж) та портфеля (6 мереж). На 523 активах це під мільйон
+    // запитів — коло не завершується НІКОЛИ, і саме тому воркер стояв вимкненим, а його
+    // п'ять маршрутів віддавали дані місячної давнини.
+    //
+    // Тому цикл бере ЗРІЗ і щоразу зсуває його далі: відпечатки холдерів (`fingerprints`)
+    // і кластери накопичуються між циклами, тож покриття росте, а кожне коло має кінець.
+    // 12 активів × 48 циклів на добу = повний обхід приблизно за добу.
+    let per_cycle = std::env::var("FORENSICS_ASSETS_PER_CYCLE").ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(12)
+        .min(whales.len());
+    let cycle_no = { f.lock().unwrap().cycle.max(0) as usize };
+    let start = if whales.is_empty() { 0 } else { (cycle_no * per_cycle) % whales.len() };
+    let slice: Vec<Value> = whales.iter().cycle().skip(start).take(per_cycle).cloned().collect();
+    tracing::info!("[forensics] цикл {}: беру {} активів із {} (з позиції {start})",
+        cycle_no + 1, slice.len(), whales.len());
+
     {
         let mut st = f.lock().unwrap();
         st.running = true;
         st.cycle += 1;
-        st.total = whales.len();
+        st.total = slice.len();
         st.processed = 0;
     }
 
-    for asset in &whales {
+    // Скільки холдерів беремо з активу. Вони обходяться ПОСЛІДОВНО (кожен — окремий
+    // набір звернень), тож це головний множник часу циклу. Типово лишаємо проєктні 50;
+    // значення нижче дає пропорційне пришвидшення ціною глибини: кластер, що тримається
+    // лише на 40-му холдері, не знайдеться.
+    let holders_cap = std::env::var("FORENSICS_HOLDERS").ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(forensics::HOLDERS);
+
+    for asset in &slice {
         let (Some(symbol), Some(contract)) = (asset["symbol"].as_str(), asset["contract"].as_str()) else { continue };
-        let top = bs::token_holders(contract, forensics::HOLDERS).await;
+        let top = bs::token_holders(contract, holders_cap).await;
 
         // Concentration trend: the real top-10 share at this moment.
         let empty = vec![];
@@ -217,7 +264,7 @@ pub async fn forensics_tick(app: &Arc<App>) {
                 (ok && !forensics::is_known_cex(&a) && a != contract)
                     .then(|| json!({"addr": a, "share": jsmath::js_num(jsmath::round_fixed(h["share"].as_f64().unwrap_or(0.0), 2))}))
             })
-            .take(forensics::HOLDERS)
+            .take(holders_cap)
             .collect();
 
         let mut hf = serde_json::Map::new();
@@ -954,7 +1001,7 @@ pub fn is_ethfam(sym: &str) -> bool {
 /// and CEX addresses.
 pub async fn whale_seeds(app: &Arc<App>, done: &HashSet<String>) -> Vec<String> {
     // Токени-представники ETH (stETH/wstETH/WETH/rETH) — тег `workers:eth_tokens`.
-    let eth_tokens = wr_store::snapshot().tokens_with_tag("workers:eth_tokens");
+    let eth_tokens = wr_store::snapshot().token_contracts_with_tag(wr_store::tags::WORKERS_ETH_TOKENS);
     if eth_tokens.is_empty() {
         // Порожній перелік тут означав би «китів не шукаємо» — і воркер
         // відпрацював би начисто без жодної помилки. Краще сказати вголос.
@@ -1074,7 +1121,31 @@ pub async fn coordinated_moves_tick(app: &Arc<App>) {
         nets_with_per.push(n);
     }
     let moves = coordinated_moves::detect_coordinated_moves_core(&nets_with_per);
-    let result = json!({"generated": now_ms(), "moves": moves, "status": {"running": false, "processed": total, "total": total}});
+    // ПОКРИТТЯ. Порожній `moves` може означати дві протилежні речі: «координованих
+    // рухів не знайдено» і «шукати не було де». Тут це друге: мережі беруться з
+    // coordinated-networks, а ті будуються з asset-forensics.json, чий воркер вимкнено —
+    // тож вхід складається з двох мереж, і тиша на виході не є відповіддю. Без цього
+    // поля панель показувала порожній список як результат вимірювання.
+    let forensics_age_min = std::fs::metadata(app.dataset.root().join("asset-forensics.json")).ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| (d.as_secs() / 60) as i64)
+        .unwrap_or(-1);
+    let result = json!({
+        "generated": now_ms(),
+        "moves": moves,
+        "status": {"running": false, "processed": total, "total": total},
+        "coverage": {
+            "networks": total,
+            "forensicsAgeMin": forensics_age_min,
+            "forensicsWorker": std::env::var("ENABLE_FORENSICS_WORKER").unwrap_or_else(|_| "0".into()),
+            "note": if total == 0 {
+                "Мереж для пошуку немає взагалі — порожній результат не є вимірюванням."
+            } else if forensics_age_min > 7 * 24 * 60 {
+                "Джерело мереж (asset-forensics.json) старіше за тиждень: відсутність рухів може означати застарілий вхід, а не спокій."
+            } else { "" },
+        },
+    });
     app.dataset.write("coordinated-moves.json", &result);
     tracing::info!("[coord-moves] synchronous moves: {}", result["moves"].as_array().map_or(0, |a| a.len()));
 }

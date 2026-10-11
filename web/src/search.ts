@@ -9,6 +9,7 @@ import { cgIdOf } from "./prices";
 import { chainsForAddress } from "./networks";
 import { assetColor, ASSET_DIR } from "./assets";
 import { searchUniverse, sectorEmoji, type UAsset } from "./universe";
+import { fetchCheck, isEvmAddress, renderCheckStrip } from "./check";
 
 
 let searchSeq = 0;
@@ -91,10 +92,17 @@ export function onSearchInput(val: string): void {
   const seq = ++searchSeq;
   window.clearTimeout(searchTimer);
   searchTimer = window.setTimeout(async () => {
-    const coins = await fetchCoinSearch(raw);
+    // Перевірка адреси йде ПАРАЛЕЛЬНО з пошуком монет і нічого не блокує: вона
+    // рахується з локальних наборів і повертається за мілісекунди, тоді як
+    // CoinGecko може думати секунду. Якщо вона впаде — пошук працює як раніше.
+    const [coins, chk] = await Promise.all([
+      fetchCoinSearch(raw),
+      isEvmAddress(raw) ? fetchCheck(raw) : Promise.resolve(null),
+    ]);
     if (seq !== searchSeq) return; // застарілий запит — ігноруємо
     const html = buildSearchHtml(raw, coins);
-    box.innerHTML = html || `<div class="px-4 py-3 text-sm text-slate-500">${t("search_no_results")}</div>`;
+    const strip = chk ? renderCheckStrip(chk) : "";
+    box.innerHTML = (strip + html) || `<div class="px-4 py-3 text-sm text-slate-500">${t("search_no_results")}</div>`;
     box.classList.remove("hidden");
   }, 250);
 }

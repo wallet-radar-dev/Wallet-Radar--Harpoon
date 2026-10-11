@@ -149,4 +149,46 @@ impl Labels {
         let map = self.map.read().unwrap();
         map.get(&addr.to_lowercase()).map(|v| v.name.clone()).filter(|s| !s.is_empty())
     }
+
+    /// Вік кешу міток у секундах; `-1`, якщо файла немає.
+    ///
+    /// Потрібен, щоб воркер імпорту міг відрізнити «кеш порожній» від «кеш є, але
+    /// старий». Без цієї різниці 33-денні мітки виглядали для нього справними, і
+    /// перший імпорт відкладався ще на 12 годин після вмикання воркера.
+    pub fn age_secs(&self) -> i64 {
+        std::fs::metadata(&self.file).ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(-1)
+    }
+
+    /// Яка саме біржа стоїть за адресою: `kucoin`, `binance`, … — або `None`.
+    ///
+    /// НАВІЩО ОКРЕМО ВІД `is_infra_addr`. Той каже лише «це інфраструктура», і для
+    /// питання «чи це переміщення всередині ОДНІЄЇ біржі» він непридатний: Binance і
+    /// Kraken обидва інфраструктура, але переказ між ними — реальний рух коштів, а
+    /// переказ Binance → Binance — просто перекладання з кишені в кишеню.
+    ///
+    /// Джерело — теги набору міток, де біржа позначена слагом (`"KuCoin 2"` має тег
+    /// `kucoin`), а не розбір назви: назви пишуть як заманеться («Binance 14»,
+    /// «Binance: Hot Wallet», «binance-cold»), і зіставляти їх рядками ненадійно.
+    pub fn exchange_of(&self, addr: &str) -> Option<String> {
+        let map = self.map.read().unwrap();
+        let e = map.get(&addr.to_lowercase())?;
+        let re = cex_tag_re();
+        if let Some(tag) = e.labels.iter().find(|t| re.is_match(t)) {
+            return Some(tag.to_lowercase());
+        }
+        // Відкат на назву — лише коли тега немає зовсім. Беремо перше слово-збіг,
+        // щоб «Binance 14» і «Binance: Hot Wallet» дали однаковий ключ.
+        let lower = e.name.to_lowercase();
+        re.find(&lower).map(|m| m.as_str().to_string())
+    }
+}
+
+/// Регулярка «тег або назва належать біржі». Компілюється один раз.
+fn cex_tag_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(CEX_NAMES).expect("CEX_NAMES має бути коректною регуляркою"))
 }

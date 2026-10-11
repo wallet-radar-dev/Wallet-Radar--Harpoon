@@ -377,18 +377,17 @@ fn group_of(s: &Ctx, addr_lc: &str) -> Option<GroupRef> {
     out
 }
 
-/// `GET /api/check?q=0x…` — одна відповідь про токен або гаманець.
+/// Зібрати сигнали й винести вердикт по ОДНІЙ адресі.
 ///
-/// Свідомо НЕ ходить у мережу: усе береться з `dataset/`. Відповідь однакова для
-/// людини й для програмного агента — той самий JSON, стабільні ключі.
-pub async fn check_route(State(s): State<Ctx>, Query(q): Query<CheckQuery>) -> impl IntoResponse {
-    let raw = q.q.unwrap_or_default();
-    let addr = raw.trim().to_string();
-    if !valid_addr(&addr) {
-        return bad_addr().into_response();
-    }
+/// Винесено з `check_route` без змін у логіці, щоб пакетна перевірка
+/// (`/api/check/bulk`) рахувала рівно те саме. Дві копії цієї арифметики з часом
+/// неминуче розійшлися б, і одна адреса отримувала б різні літери залежно від того,
+/// поодинці її питали чи списком.
+///
+/// `supply` і `assets` передаються ззовні: для списку з 500 адрес читати ці файли
+/// 500 разів — безглуздо, вони однакові для всієї пачки.
+pub fn assess_addr(s: &Ctx, addr: &str, supply: &Value, assets: &Value) -> Value {
     let lc = addr.to_ascii_lowercase();
-
     let mut sig = Signals::default();
 
     // Мітка відомої сутності.
@@ -399,30 +398,27 @@ pub async fn check_route(State(s): State<Ctx>, Query(q): Query<CheckQuery>) -> i
     }
 
     // Токен? Перевіряємо за реєстром обігу.
-    let supply = s.dataset.read("token-supply.json").unwrap_or(Value::Null);
     let is_token = supply.get(&lc).is_some();
     if is_token {
         sig.symbol = supply[&lc]["symbol"].as_str().map(|x| x.to_string());
     }
 
     // Дані про актив із набору активів груп капіталу.
-    if let Some(av) = s.dataset.read("capital-group-assets.json") {
-        if let Some(list) = av["assets"].as_array() {
-            if let Some(a) = list.iter().find(|a| {
-                a["contract"].as_str().map(|c| c.eq_ignore_ascii_case(&lc)).unwrap_or(false)
-            }) {
-                sig.top10pct = a["top10pct"].as_f64();
-                sig.group_bought = a["groupBought"].as_f64();
-                sig.real_liquidity = a["real"].as_bool();
-                if sig.symbol.is_none() {
-                    sig.symbol = a["symbol"].as_str().map(|x| x.to_string());
-                }
+    if let Some(list) = assets["assets"].as_array() {
+        if let Some(a) = list.iter().find(|a| {
+            a["contract"].as_str().map(|c| c.eq_ignore_ascii_case(&lc)).unwrap_or(false)
+        }) {
+            sig.top10pct = a["top10pct"].as_f64();
+            sig.group_bought = a["groupBought"].as_f64();
+            sig.real_liquidity = a["real"].as_bool();
+            if sig.symbol.is_none() {
+                sig.symbol = a["symbol"].as_str().map(|x| x.to_string());
             }
         }
     }
 
     // Гаманець? Належність до групи капіталу.
-    if let Some(g) = group_of(&s, &lc) {
+    if let Some(g) = group_of(s, &lc) {
         sig.group_id = Some(g.id);
         sig.group_name = Some(g.name);
         sig.group_size = Some(g.size);
@@ -440,7 +436,96 @@ pub async fn check_route(State(s): State<Ctx>, Query(q): Query<CheckQuery>) -> i
         Kind::Unknown
     };
 
-    Json(assess(&addr, kind, &sig)).into_response()
+    assess(addr, kind, &sig)
+}
+
+/// `GET /api/check?q=0x…` — одна відповідь про токен або гаманець.
+///
+/// Свідомо НЕ ходить у мережу: усе береться з `dataset/`. Відповідь однакова для
+/// людини й для програмного агента — той самий JSON, стабільні ключі.
+pub async fn check_route(State(s): State<Ctx>, Query(q): Query<CheckQuery>) -> impl IntoResponse {
+    let raw = q.q.unwrap_or_default();
+    let addr = raw.trim().to_string();
+    if !valid_addr(&addr) {
+        return bad_addr().into_response();
+    }
+    let supply = s.dataset.read("token-supply.json").unwrap_or(Value::Null);
+    let assets = s.dataset.read("capital-group-assets.json").unwrap_or(Value::Null);
+    Json(assess_addr(&s, &addr, &supply, &assets)).into_response()
+}
+
+/// Скільки адрес приймаємо за раз. Межа не технічна, а чесна: відповідь має лишатись
+/// миттєвою, інакше зникає сенс «перевірки за 30 секунд». 500 адрес рахуються з
+/// локальних наборів за частку секунди.
+const BULK_MAX: usize = 500;
+
+#[derive(Deserialize)]
+pub struct BulkBody {
+    addresses: Vec<String>,
+}
+
+/// `POST /api/check/bulk` — та сама перевірка, але списком.
+///
+/// НАВІЩО. Це те, чого бракує навіть у промислових розслідувальних інструментах:
+/// користувачі Chainalysis Reactor у відгуках прямо скаржаться на відсутність
+/// масового завантаження адрес. Аналітик має список із сотні адрес — контрагенти
+/// угоди, холдери токена, вивантаження з біржі — і мусить перевіряти їх по одній.
+///
+/// Що важливо зберегти: підсумок рахує НЕВІДОМІ окремо й ніколи не зараховує їх до
+/// «чистих». Список із 90 невідомих адрес і 10 чистих не повинен виглядати як
+/// «переважно все гаразд» — тому `unknown` стоїть у зведенні окремим числом.
+pub async fn check_bulk_route(State(s): State<Ctx>, Json(b): Json<BulkBody>) -> impl IntoResponse {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut invalid: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = Vec::new();
+
+    for raw in b.addresses.iter() {
+        let a = raw.trim().to_string();
+        if a.is_empty() { continue }
+        if !valid_addr(&a) {
+            if invalid.len() < 50 { invalid.push(a) }
+            continue;
+        }
+        // Дублікати в списку — звичайна річ при вставці з таблиці; рахуємо адресу раз.
+        if seen.insert(a.to_ascii_lowercase()) && queue.len() < BULK_MAX {
+            queue.push(a);
+        }
+    }
+    let truncated = seen.len().saturating_sub(queue.len());
+
+    // Спільні для всієї пачки набори читаємо один раз.
+    let supply = s.dataset.read("token-supply.json").unwrap_or(Value::Null);
+    let assets = s.dataset.read("capital-group-assets.json").unwrap_or(Value::Null);
+
+    let mut by_grade: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut unknown = 0u64;
+    let mut flagged = 0u64;
+    let results: Vec<Value> = queue.iter().map(|a| {
+        let v = assess_addr(&s, a, &supply, &assets);
+        if v["coverage"]["known"].as_bool() == Some(false) {
+            unknown += 1;
+        } else {
+            let g = v["grade"].as_str().unwrap_or("?").to_string();
+            *by_grade.entry(g).or_insert(0) += 1;
+        }
+        if v["flags"].as_array().map(|f| !f.is_empty()).unwrap_or(false) { flagged += 1 }
+        v
+    }).collect();
+
+    Json(json!({
+        "checked": results.len(),
+        "limit": BULK_MAX,
+        // Скільки адрес не влізло в межу — мовчки обрізати список не можна.
+        "truncated": truncated,
+        "invalid": invalid,
+        "summary": {
+            "byGrade": by_grade,
+            // Невідомі — ОКРЕМО. Вони не «чисті» й не входять у розподіл літер.
+            "unknown": unknown,
+            "withFlags": flagged,
+        },
+        "results": results,
+    })).into_response()
 }
 
 #[cfg(test)]

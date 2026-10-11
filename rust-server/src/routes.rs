@@ -1012,25 +1012,6 @@ pub async fn openapi_route() -> impl IntoResponse {
 /// portfolio-backtest.js CEX set — hot wallets excluded from the whale cohort.
 /// Перелік у базі, тег `routes:pb_cex`.
 
-/// Адреси з тегу в базі. Теги іменовані за файлом і колишнім масивом, тож
-/// переліки різних модулів не зливаються в один.
-fn tagged(tag: &str) -> Vec<String> {
-    let Ok(c) = wr_store::open() else {
-        tracing::error!("[{}] сховище недоступне — перелік порожній", tag);
-        return Vec::new();
-    };
-    let Ok(mut q) = c.prepare("SELECT address FROM wallet_tags WHERE tag=?1") else {
-        return Vec::new();
-    };
-    let v: Vec<String> = q
-        .query_map([tag], |x| x.get(0))
-        .map(|it| it.filter_map(|x| x.ok()).collect())
-        .unwrap_or_default();
-    if v.is_empty() {
-        tracing::error!("[{}] тег порожній — фільтр вимкнено, а не звужено", tag);
-    }
-    v
-}
 
 
 /// portfolio-backtest.js `assetWhaleEvents(contract)` — reconstruct the whale
@@ -1044,8 +1025,9 @@ pub async fn asset_whale_events(contract: &str) -> Vec<Value> {
     let holders: Vec<String> = top["holders"].as_array().unwrap_or(&empty).iter()
         .map(|h| h["address"].as_str().unwrap_or("").to_lowercase())
         .filter(|a| {
-            let pb = tagged("routes:pb_cex");
-            re.is_match(a) && !pb.iter().any(|x| x == a) && a != contract
+            re.is_match(a)
+                && !wr_store::snapshot().has_tag("eth", a, wr_store::tags::ROUTES_PB_CEX)
+                && a != contract
         })
         .take(12)
         .collect();
@@ -1344,8 +1326,8 @@ pub async fn neighbors_of(addr: &str) -> Vec<String> {
     let mut entries: Vec<(String, i64)> = freq
         .into_iter()
         .filter(|(o, _)| {
-            let hubs = tagged("routes:hubs");
-            !is_contract.contains(o) && !hubs.iter().any(|x| x == o)
+            !is_contract.contains(o)
+                && !wr_store::snapshot().has_tag("eth", o, wr_store::tags::ROUTES_HUBS)
         })
         .collect();
     entries.sort_by(|a, b| b.1.cmp(&a.1)); // stable: ties keep first-seen order
@@ -1810,19 +1792,9 @@ pub async fn asset_groups_route(Query(q): Query<ContractQuery>) -> impl IntoResp
 }
 
 
-/// assetflow.js KNOWN_CEX — its own 10-address exchange/burn set.
-/// Набір адрес із бази за тегом.
-///
-/// Шість модулів rust-server мали власну копію набору `KNOWN` з index.js, і копії
-/// РОЗІЙШЛИСЬ: спільних 9 адрес, у трьох є ще FTX, у двох — ще одна біржа,
-/// forensics не має жодної з двох. Тому в кожного свій тег: звести їх до одного
-/// означало б мовчки розширити три модулі.
-fn tag_has(tag: &str, addr: &str) -> bool {
-    wr_store::snapshot().wallet_has_tag("eth", addr, tag)
-}
 
 pub fn assetflow_known_cex(a: &str) -> bool {
-    tag_has("routes:assetflow_known_cex", a)
+    wr_store::snapshot().has_tag("eth", a, wr_store::tags::ROUTES_ASSETFLOW_KNOWN_CEX)
 }
 
 
@@ -1851,7 +1823,7 @@ pub async fn asset_flow_route(Query(q): Query<ContractQuery>) -> impl IntoRespon
 
 /// strategy-backtest.js KNOWN_CEX — its own 9-address exchange/burn set.
 pub fn strat_known_cex(a: &str) -> bool {
-    tag_has("routes:strat_known_cex", a)
+    wr_store::snapshot().has_tag("eth", a, wr_store::tags::ROUTES_STRAT_KNOWN_CEX)
 }
 
 
@@ -1921,34 +1893,16 @@ pub async fn strat_asset_events(contract: &str) -> Vec<Value> {
 /// `GET /api/strategy-backtest` — strategy-backtest.js `runStrategyBacktest`: the
 /// DCA-behind-a-whale backtest across the universe with threshold calibration.
 
-/// Пари (символ, контракт) з бази за тегом.
-///
-/// Порядок — за символом. У масиві він був за позицією в коді, але бектест
-/// підсумовує по всьому всесвіту, тож порядок на результат не впливає.
-fn tokens_tagged(tag: &str) -> Vec<(String, String)> {
-    let c = match wr_store::open() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("[{tag}] сховище недоступне: {e}");
-            return Vec::new();
-        }
-    };
-    let Ok(mut q) = c.prepare(
-        "SELECT t.symbol, t.contract FROM token_tags g
-         JOIN tokens t ON t.chain=g.chain AND t.contract=g.contract
-         WHERE g.tag=?1 ORDER BY t.symbol",
-    ) else {
-        return Vec::new();
-    };
-    q.query_map([tag], |r| Ok((r.get(0)?, r.get(1)?)))
-        .map(|it| it.filter_map(|x| x.ok()).collect())
-        .unwrap_or_default()
-}
 
 pub async fn strategy_backtest_route() -> impl IntoResponse {
     const THR: [f64; 5] = [0.30, 0.40, 0.48, 0.55, 0.70];
     let mut per_asset: Vec<Value> = Vec::new();
-    let su = tokens_tagged("routes:strat_universe");
+    let snap = wr_store::snapshot();
+    let su: Vec<(String, String)> = snap
+        .tokens_tagged(wr_store::tags::ROUTES_STRAT_UNIVERSE)
+        .into_iter()
+        .map(|t| (t.symbol_or_contract().to_string(), t.contract.clone()))
+        .collect();
     for (sym, contract) in &su {
         let events = strat_asset_events(contract).await;
         per_asset.push(strategy_backtest::asset_result(sym, &events, &THR));
@@ -2202,7 +2156,31 @@ pub async fn money_trace_route(Query(q): Query<MoneyTraceQuery>) -> impl IntoRes
 
 
 pub async fn passthrough(State(s): State<Ctx>, file: &'static str, fallback: Value) -> impl IntoResponse {
-    Json(s.dataset.read_or(file, fallback))
+    let mut v = s.dataset.read_or(file, fallback);
+    // ВІК ДАНИХ У САМІЙ ВІДПОВІДІ. 25 маршрутів віддають файли з диска; частину з них
+    // пишуть воркери, які вимкнено (forensics — 22 доби, balances, backtest). Досі це
+    // виглядало однаково зі свіжими даними: код 200, повне тіло, жодної позначки. Тому
+    // кожна відповідь тепер несе `_freshness` — і людині на екрані, і програмному
+    // агенту видно, коли файл останній раз змінювався.
+    //
+    // Поле додається лише до об'єкта: якщо корінь файла — масив, вставити ключ нікуди,
+    // і тоді краще віддати як є, ніж змінювати форму відповіді.
+    if let Some(obj) = v.as_object_mut() {
+        let path = s.dataset.root().join(file);
+        let (exists, age_sec) = match std::fs::metadata(&path).ok().and_then(|m| m.modified().ok()) {
+            Some(t) => (true, t.elapsed().map(|d| d.as_secs() as i64).unwrap_or(-1)),
+            None => (false, -1),
+        };
+        obj.insert("_freshness".into(), json!({
+            "file": file,
+            "exists": exists,
+            "ageSec": age_sec,
+            // Порогів тут навмисне немає: «застаріло» залежить від того, як часто
+            // джерело мусить оновлюватись, і вирішує це той, хто показує панель.
+            "asOf": if age_sec >= 0 { json!(now_ms() / 1000 - age_sec) } else { Value::Null },
+        }));
+    }
+    Json(v)
 }
 
 
