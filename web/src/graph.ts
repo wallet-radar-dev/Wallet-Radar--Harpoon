@@ -1026,6 +1026,9 @@ async function loadWalletGraph(wallet: Wallet): Promise<void> {
   let ok = false;
   if (BACKEND && wallet.address && wallet.address.length > 25) ok = await loadRealGraph(wallet.address, wallet.label || shortAddr(wallet.address));
   if (!ok) { gRealMode = false; buildGraphData(); renderGraphChrome(); }
+  // Ні ончейн-графа, ні локальних подій: замінити «Завантаження…» на підсумок,
+  // інакше напис лишається назавжди і виглядає як завислий запит.
+  if (!gNodes.length) empty.textContent = t("graph_empty");
   empty.classList.toggle("hidden", gNodes.length > 0);
   const modal = $("#graph-modal");
   modal.dataset.nodes = String(gNodes.length);

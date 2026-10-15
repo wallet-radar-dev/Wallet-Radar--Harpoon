@@ -54,11 +54,15 @@ pub fn db_path() -> PathBuf {
 /// Відкрити наявну базу. НЕ створює порожню: мовчазна порожня база гірша за відмову —
 /// код побіг би з нульовими порогами й вирішив, що все гаразд.
 pub fn open() -> Result<Connection> {
-    let p = db_path();
-    if !p.exists() {
-        return Err(Error::Missing(p));
+    open_at(&db_path())
+}
+
+/// Те саме, що `open`, але за явним шляхом — без читання `WR_DB` з оточення.
+pub fn open_at(path: &Path) -> Result<Connection> {
+    if !path.exists() {
+        return Err(Error::Missing(path.to_path_buf()));
     }
-    let c = Connection::open(&p)?;
+    let c = Connection::open(path)?;
     c.pragma_update(None, "foreign_keys", "ON")?;
     Ok(c)
 }
@@ -105,9 +109,9 @@ pub fn migrate(c: &mut Connection) -> Result<()> {
 /// повернути нулі й дати системі працювати з вимкненими порогами, що виглядало б
 /// як нормальна робота і псувало б кожен вердикт. Краще впасти на першому запиті.
 pub fn snapshot() -> &'static Snapshot {
-    use std::sync::OnceLock;
-    static S: OnceLock<Snapshot> = OnceLock::new();
-    S.get_or_init(|| match try_snapshot() {
+    // Процес, що викликав `init()` на старті, сюди з порожнім SNAPSHOT не потрапляє:
+    // паніка нижче лишається лише страховкою для бінарників, які `init()` не кличуть.
+    SNAPSHOT.get_or_init(|| match try_snapshot() {
         Ok(s) => s,
         Err(e) => panic!(
             "wr-store: довідники недоступні ({e}).\n\
@@ -121,8 +125,29 @@ pub fn snapshot() -> &'static Snapshot {
 /// Те саме, але помилку віддає викликачеві — для бінарників, які хочуть
 /// перевірити доступність на старті й самі вирішити, що робити.
 pub fn try_snapshot() -> Result<Snapshot> {
-    let c = open()?;
+    try_snapshot_at(&db_path())
+}
+
+/// `try_snapshot` за явним шляхом.
+pub fn try_snapshot_at(path: &Path) -> Result<Snapshot> {
+    let c = open_at(path)?;
     Snapshot::load(&c)
+}
+
+/// Спільний знімок процесу. Заповнює `init()` (з помилкою) або `snapshot()` (з панікою).
+static SNAPSHOT: std::sync::OnceLock<Snapshot> = std::sync::OnceLock::new();
+
+/// Завантажити довідники один раз на старті процесу й повернути помилку, а не панікувати.
+///
+/// Сервер мусить кликати це до першого запиту: інакше `snapshot()` панікує посеред
+/// обробника, і клієнт отримує обірване з'єднання замість відповіді. Після успішного
+/// `init()` усі виклики `snapshot()` віддають уже завантажений знімок.
+pub fn init() -> Result<&'static Snapshot> {
+    if let Some(s) = SNAPSHOT.get() {
+        return Ok(s);
+    }
+    let s = try_snapshot()?;
+    Ok(SNAPSHOT.get_or_init(|| s))
 }
 
 pub use model::{Money, Role, Token, Wallet, WalletKind};
@@ -438,5 +463,42 @@ mod tests {
             Some((Money::Usd, 6))
         );
         assert_eq!(s.real_money("eth", "0xdead"), None);
+    }
+
+    /// Унікальний шлях у тимчасовій теці: тести йдуть паралельно.
+    fn tmp_db(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("wr-store-{}-{name}.db", std::process::id()))
+    }
+
+    #[test]
+    fn missing_store_is_an_error_not_a_panic() {
+        // Відтворення бага «граф гаманця висить»: без файла бази знімок мусить
+        // повернути помилку з шляхом, яку сервер покаже на старті.
+        let p = tmp_db("missing");
+        let _ = std::fs::remove_file(&p);
+        match try_snapshot_at(&p) {
+            Err(Error::Missing(got)) => assert_eq!(got, p),
+            other => panic!("очікували Error::Missing, отримали {other:?}"),
+        }
+        assert!(
+            !p.exists(),
+            "перевірка створила порожню базу замість відмови"
+        );
+    }
+
+    #[test]
+    fn migrated_empty_store_loads_but_fails_validation() {
+        let p = tmp_db("empty");
+        let _ = std::fs::remove_file(&p);
+        drop(open_or_create(&p).unwrap());
+        let s = try_snapshot_at(&p).unwrap();
+        // Порожня, але валідна схема відкривається; брак тегів ловить validate().
+        assert!(
+            s.validate().is_err(),
+            "порожня база пройшла перевірку повноти"
+        );
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", p.display()));
+        }
     }
 }
