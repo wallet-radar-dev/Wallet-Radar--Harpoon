@@ -257,6 +257,22 @@ async fn main() -> anyhow::Result<()> {
         return satellite::probe().await;
     }
 
+    // Довідники wr-store мусять бути завантажені ДО першого запиту. Інакше
+    // `wr_store::snapshot()` панікує посеред обробника (напр. /api/wallet-graph), і
+    // браузер отримує обірване з'єднання — граф гаманця «висів» на завантаженні.
+    // Як і обіцяє README: немає бази — сервер не стартує, а пояснює, що робити.
+    let store = wr_store::init().map_err(|e| {
+        anyhow::anyhow!(
+            "wr-store: довідники недоступні ({e}). Шлях: WR_DB={}. Полагодити: `wr-import load`.",
+            wr_store::db_path().display()
+        )
+    })?;
+    // Брак тегів — не привід лягати: частина маршрутів працює і без них. Але мовчати
+    // не можна, інакше порожні відповіді виглядатимуть як «даних немає».
+    if let Err(e) = store.validate() {
+        tracing::warn!("[wr-store] {e}");
+    }
+
     let data_dir = std::env::var("DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| root.join("server"));
 
     let dataset_dir = root.join("dataset");
