@@ -72,7 +72,7 @@ fn main() {
         }
         eprintln!("[capreal] членство з group-membership.json: {} груп", gid.len());
     } else {
-    for (i, g) in groups.iter().enumerate() {
+    for g in groups.iter() {
         gid.push(g["id"].as_str().unwrap_or("?").to_string());
         gsize.push(g["size"].as_u64().unwrap_or(0));
         let mut set = HashSet::new();

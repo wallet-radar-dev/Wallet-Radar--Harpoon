@@ -10,8 +10,7 @@
 use backfill::patterns::{Finding, PatternDb};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::{self};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;

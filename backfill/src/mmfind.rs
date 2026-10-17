@@ -151,10 +151,9 @@ fn main() {
     // --- скоринг ММ ---
     let mut mm: Vec<Value> = Vec::new();
     let mut mm_by_tok: HashMap<String, (f64, u32)> = HashMap::new();
-    let mut skipped_contracts = 0usize;
     for ((w, tok), p) in &pair {
         if p.n < min_ops { continue }
-        if is_contract.contains(w) { skipped_contracts += 1; continue }
+        if is_contract.contains(w) { continue }
         let turn = p.inn + p.out;
         if turn <= 0.0 { continue }
         let bal = (p.inn - p.out).abs() / turn;
@@ -201,7 +200,7 @@ fn main() {
         let cut = (days.len() / 10).max(3);
         let big: Vec<u64> = days.iter().take(cut).map(|d| d.0).collect();
         let rest: Vec<u64> = days.iter().skip(cut).map(|d| d.0).collect();
-        let mut f = |set: &Vec<u64>, horizon: u64| -> f64 {
+        let f = |set: &Vec<u64>, horizon: u64| -> f64 {
             let mut v: Vec<f64> = Vec::new();
             for d in set {
                 let t0 = d * 86400;
@@ -216,7 +215,7 @@ fn main() {
         // ТЕСТ НА ВИПЕРЕДЖЕННЯ: що робила ціна ДО купівлі. Якщо вона вже росла так само —
         // група приєднується до руху, а не створює його. Якщо до купівлі рух ~0, а після
         // додатний — це вже схоже на вплив (але й тоді не доказ: могла бути спільна причина).
-        let mut pre = |set: &Vec<u64>, back: u64| -> f64 {
+        let pre = |set: &Vec<u64>, back: u64| -> f64 {
             let mut v: Vec<f64> = Vec::new();
             for d in set {
                 let t0 = d * 86400;

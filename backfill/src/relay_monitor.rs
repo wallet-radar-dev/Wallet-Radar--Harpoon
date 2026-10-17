@@ -5,7 +5,7 @@
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // (адреса, мітка, чи біржо-суміжне)

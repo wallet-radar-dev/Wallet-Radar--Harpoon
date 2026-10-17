@@ -97,7 +97,7 @@ fn main() {
         if v < min_eth { continue }                          // пил і отруєння — не зв'язок
         used += 1;
 
-        let mut id = |s: &str, idx: &mut HashMap<String, u32>, names: &mut Vec<String>| -> u32 {
+        let id = |s: &str, idx: &mut HashMap<String, u32>, names: &mut Vec<String>| -> u32 {
             if let Some(i) = idx.get(s) { *i } else {
                 let i = names.len() as u32;
                 names.push(s.to_string());

@@ -272,7 +272,9 @@ async fn main() {
             // read_line вимагає коректний UTF-8; на першому ж непридатному байті
             // повертає помилку, і обрив тут означав мовчазну втрату решти файлу.
             match rdr.read_line(&mut line) {
-                Ok(0) | Err(_) => continue,
+                Ok(0) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
+                Err(_) => break,
                 Ok(_) => {}
             }
             let p: Vec<&str> = line.splitn(6, ',').collect();

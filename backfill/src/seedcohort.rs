@@ -19,7 +19,7 @@
 //! Вихід: dataset/backfill/seedcohort.json + seedcohort-report.md
 
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

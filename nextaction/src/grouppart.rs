@@ -15,7 +15,7 @@
 //!        ОНОВЛЮЄ dataset/capital-groups.json (size=повний, members=зріз, membersFile=посилання)
 //! Args: ROOT. Env: MIN_GROUP(20) HUB_DEG(300) MEMBERS_CAP(1000) WRITE(1)
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -69,7 +69,7 @@ fn main() {
     // --- граф EOA↔EOA ---
     let mut id: HashMap<String, u32> = HashMap::new();
     let mut names: Vec<String> = Vec::new();
-    let mut getid = |s: &str, id: &mut HashMap<String, u32>, names: &mut Vec<String>| -> u32 {
+    let getid = |s: &str, id: &mut HashMap<String, u32>, names: &mut Vec<String>| -> u32 {
         if let Some(&i) = id.get(s) { i } else { let i = names.len() as u32; id.insert(s.to_string(), i); names.push(s.to_string()); i }
     };
     let mut edges: Vec<(u32, u32)> = Vec::new();

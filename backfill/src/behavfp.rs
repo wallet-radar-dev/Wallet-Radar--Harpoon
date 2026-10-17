@@ -518,16 +518,12 @@ async fn main() {
     let mut uf = Uf::new(cands.len());
     let mut edges: Vec<Value> = Vec::new();
     let mut all_scores: Vec<f64> = Vec::new();
-    let mut hard_pairs = 0usize;
     for ii in 0..live.len() {
         for jj in (ii + 1)..live.len() {
             let (i, j) = (live[ii], live[jj]);
             let (a, b) = (fps[i].as_ref().unwrap(), fps[j].as_ref().unwrap());
             let (s, sf, sa, hc, dc) = score(a, b);
             all_scores.push(s);
-            if sf || sa >= 1 {
-                hard_pairs += 1;
-            }
             // Твердий сигнал обов'язковий: сам по собі збіг «вечірньої години» —
             // це не зв'язок, це годинний пояс.
             if s >= min_score && (sf || sa >= 1) {
