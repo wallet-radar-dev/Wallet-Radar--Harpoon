@@ -126,6 +126,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `ALLOW_EMPTY_WRITE` — глобальний стан процесу, а тести біжать паралельно:
+    /// тест з явним дозволом без цього замка вмикав його для сусідніх тестів,
+    /// і ті випадково «проходили» захист, якого мали вимагати.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn tmpdir() -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("safewrite-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
@@ -143,6 +152,7 @@ mod tests {
 
     #[test]
     fn an_empty_result_never_destroys_existing_data() {
+        let _g = env_guard();
         let p = tmpdir().join("guard.json");
         let p = p.to_str().unwrap();
         save_json(p, &json!({"груп": (1..200).collect::<Vec<_>>()})).unwrap();
@@ -155,6 +165,7 @@ mod tests {
 
     #[test]
     fn a_drastic_shrink_is_refused_too() {
+        let _g = env_guard();
         let p = tmpdir().join("shrink.json");
         let p = p.to_str().unwrap();
         save_json(p, &json!({"x": (1..500).collect::<Vec<_>>()})).unwrap();
@@ -163,6 +174,7 @@ mod tests {
 
     #[test]
     fn an_explicit_override_lets_a_real_emptying_through() {
+        let _g = env_guard();
         let p = tmpdir().join("forced.json");
         let p = p.to_str().unwrap();
         save_json(p, &json!({"x": (1..200).collect::<Vec<_>>()})).unwrap();
