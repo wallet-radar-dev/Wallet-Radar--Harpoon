@@ -179,7 +179,7 @@ async fn main() {
 
     // ── 3-4. ребра й спільні джерела ────────────────────────────────────────
     // Читаємо краул один раз, рахуємо і для цільової групи, і для контрольних вибірок.
-    let idx: HashMap<&str, usize> = pool.iter().enumerate().map(|(i, w)| (w.as_str(), i)).collect();
+    let _idx: HashMap<&str, usize> = pool.iter().enumerate().map(|(i, w)| (w.as_str(), i)).collect();
     let all_net: Vec<String> = known
         .iter()
         .filter(|(_, g)| matches!(g.as_str(), "HUB" | "NET" | "NET-WEAK"))

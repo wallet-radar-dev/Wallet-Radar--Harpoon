@@ -13,7 +13,7 @@
 //!
 //! Вихід: dataset/backfill/trace2.json. Args: ROOT ADDR_FILE. Env: OFFSET(400)
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
