@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [Develop, main]
+  workflow_dispatch:
+
+# Нова ревізія тієї ж гілки скасовує попередній запуск.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  rust:
+    name: rust / ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: wr-dict
+          - crate: wr-store
+          - crate: gat
+          - crate: features
+          # Тести patterns читають довідники з wallet-radar.db, а seed-дані навмисно
+          # лежать поза репозиторієм (див. wr-store/src/bin/wr-import.rs, WR_SEED).
+          # Тому в CI лише збираємо тести, не запускаємо.
+          - crate: patterns
+            test_args: --no-run
+          # У nextaction/Cargo.toml оголошено bin-цілі без вихідних файлів,
+          # тож крейт цілком не збирається — перевіряємо лише бібліотеку.
+          - crate: nextaction
+            test_args: --lib
+          - crate: backfill
+          # tonic-build потребує protoc.
+          - crate: satellite
+            protoc: true
+          - crate: rust-server
+            protoc: true
+    defaults:
+      run:
+        working-directory: ${{ matrix.crate }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        if: matrix.protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+
+      # Поки що інформаційні: у всіх крейтах є старі розбіжності з rustfmt і
+      # clippy-зауваження. Після окремого PR з форматуванням і чищенням —
+      # прибрати continue-on-error, щоб вони стали обов'язковими (див. AGENTS.md).
+      - name: cargo fmt --check
+        continue-on-error: true
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        continue-on-error: true
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked --all-features ${{ matrix.test_args }}
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # tsc зараз видає помилки (невикористані змінні, possibly undefined) —
+      # інформаційно, доки їх не виправлено.
+      - name: typecheck
+        continue-on-error: true
+        run: npm run typecheck
+
+      # Збірка в тимчасову теку, щоб не чіпати закомічені web/app.js і web/app.css.
+      - name: bundle js
+        run: npx --yes esbuild@0.24 web/src/main.ts --bundle --target=es2020 --format=iife --platform=browser --outfile="$RUNNER_TEMP/app.js"
+
+      - name: bundle css
+        run: npx --yes tailwindcss@3 -c tailwind.config.cjs -i web/tw-input.css -o "$RUNNER_TEMP/app.css" --minify
