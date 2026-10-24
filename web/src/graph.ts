@@ -5,7 +5,7 @@
 
 import type { Wallet, BlockchainEvent, EntityType, Lang } from "./types";
 import { t, lang } from "./i18n";
-import { $, shortAddr, fmtUsd, fmtNum, fmtTime } from "./util";
+import { $, shortAddr, fmtUsd, fmtNum, fmtTime, localeOf } from "./util";
 import { state } from "./state";
 import { escAttr, link, toast } from "./ui";
 import { getJSON } from "./api";
@@ -676,13 +676,204 @@ export async function loadGroupStats(membersCsv: string, container: HTMLElement)
   } catch { container.innerHTML = `<div class="text-[11px] text-bad">${t("conc_err")}</div>`; }
 }
 
+// ── Блок «Групи капіталу»: KPI, фонові процеси, картки груп із вкладками ──────────
+type CgMember = { address: string; label: string | null; count: number; role?: string };
+type CgGroup = {
+  id?: string; size: number; cores?: number; members: CgMember[]; commonAssets: string[];
+  controlledEmission?: Array<{ symbol: string; share: number }>;
+};
+type CgWorker = {
+  key: string; label: string; exists: boolean; ok: boolean; ageMin: number | null;
+  processed?: number | null; total?: number | null; running?: boolean | null;
+};
+type CgTab = "members" | "link" | "coord";
+
+/** Множина за ключем `${base}_one|_few|_many`: три форми для uk/ru, дві для en/de/fr. */
+function cgPlural(n: number, base: string): string {
+  if (lang === "uk" || lang === "ru") {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return t(base + "_one");
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return t(base + "_few");
+    return t(base + "_many");
+  }
+  return t(n === 1 ? base + "_one" : base + "_many");
+}
+
+/** «1-а група», «3-я група» (uk); інші мови беруть свій шаблон cgv_nth. */
+const cgNth = (n: number): string => t("cgv_nth", { n: String(n), suf: n % 10 === 3 && n % 100 !== 13 ? "я" : "а" });
+
+/** «щойно», «12 хв тому», «7 год тому», «3 дн тому». */
+function cgAgo(min: number): string {
+  if (min < 1) return t("cgv_ago_now");
+  if (min < 60) return t("cgv_ago_min", { n: String(Math.round(min)) });
+  if (min < 48 * 60) return t("cgv_ago_h", { n: String(Math.round(min / 60)) });
+  return t("cgv_ago_d", { n: String(Math.round(min / 1440)) });
+}
+
+// Норма тиші воркера, хв — ті самі пороги, що WORKERS у rust-server/src/health.rs.
+// Лише підпис «≤ 6 год»: чи воркер ok, вирішує бекенд.
+const CG_WORKER_NORM_MIN: Record<string, number> = { scan: 360, whale: 240, forensics: 90, conductors: 45, active: 180, graph: 45, backtest: 360 };
+const cgNorm = (min: number): string => min >= 120 ? t("cgv_norm_h", { n: String(Math.round(min / 60)) }) : t("cgv_norm_min", { n: String(min) });
+
+/** «$» перед компактним числом мовою інтерфейсу: $1,24 млрд / $1.24B. */
+const cgUsd = (n: number): string => "$" + new Intl.NumberFormat(localeOf(), { notation: "compact", maximumFractionDigits: 2 }).format(n);
+const cgPct = (share: number): string => fmtNum(share * 100, share * 100 >= 10 ? 0 : 1) + "%";
+const cgTopShare = (g: CgGroup): number => Math.max(-1, ...(g.controlledEmission ?? []).map((e) => e.share));
+const cgWorkerName = (w: CgWorker): string => { const k = "cgw_" + w.key; const s = t(k); return s === k ? w.label : s; };
+
+const CG_TAB_BASE = "min-h-[32px] rounded-lg text-[10.8px] font-semibold transition";
+const CG_TAB_IDLE = "text-slate-300 hover:bg-white/5";
+const CG_TAB_ACTIVE: Record<CgTab, string> = { members: "bg-slate-700 text-slate-50", link: "bg-blue-600 text-white", coord: "bg-fuchsia-700 text-white" };
+
+function cgKpis(groups: number, gdb: { nodes: number; edges: number; volumeUsd: number } | null): string {
+  const tile = (val: string, label: string, box: string, valCls: string): string =>
+    `<div class="flex-auto min-w-0 whitespace-nowrap rounded-[10px] border px-2.5 py-2 flex flex-col gap-0.5 ${box}"><span class="text-base font-semibold ${valCls}">${val}</span><span class="text-[11px] text-slate-300">${label}</span></div>`;
+  const nodes = gdb?.nodes ?? 0, edges = gdb?.edges ?? 0, vol = gdb?.volumeUsd ?? 0;
+  // flex-wrap: у вузькій колонці плитки переносяться в другий рядок, а не обрізаються.
+  return `<div class="flex flex-wrap gap-1.5">`
+    + tile(fmtNum(groups, 0), cgPlural(groups, "cgv_groups"), "bg-accent/15 border-accent/35", "text-blue-200")
+    + tile(fmtNum(nodes, 0), cgPlural(nodes, "cgv_wallets"), "bg-[#37E0C8]/10 border-[#37E0C8]/30", "text-teal-200")
+    + tile(fmtNum(edges, 0), cgPlural(edges, "cgv_links"), "bg-purple-500/15 border-purple-500/35", "text-purple-200")
+    + tile(cgUsd(vol), t("cgv_volume"), "bg-good/15 border-good/35", "text-green-300")
+    + `</div>`;
+}
+
+function cgWorkersPanel(h: { workers: CgWorker[]; healthy: number; total: number } | null): string {
+  if (!h || !h.workers?.length) return "";
+  type St = "ok" | "run" | "stale" | "never";
+  const st = (w: CgWorker): St => !w.exists ? "never" : !w.ok ? "stale"
+    : w.running && w.total && (w.processed ?? 0) < w.total ? "run" : "ok";
+  const DOT: Record<St, string> = { ok: "bg-good", run: "bg-accent", stale: "bg-warn", never: "bg-edge" };
+  const rows = h.workers.map((w) => ({ w, s: st(w) }));
+  const cnt = (s: St): number => rows.filter((r) => r.s === s).length;
+  const pill = h.healthy === h.total ? "text-green-300 bg-good/15" : h.healthy === 0 ? "text-slate-300 bg-slate-500/20" : "text-amber-300 bg-warn/15";
+  const legendItem = (n: number, dot: string, text: string, cls = ""): string => n
+    ? `<span class="inline-flex items-center gap-1.5 ${cls}"><span class="w-2 h-2 rounded-full ${dot}" aria-hidden="true"></span>${n} ${text}</span>` : "";
+  const legend = legendItem(cnt("ok"), "bg-good", cgPlural(cnt("ok"), "cgv_lg_ok"))
+    + legendItem(cnt("run"), "bg-accent", cgPlural(cnt("run"), "cgv_lg_run"))
+    + legendItem(cnt("stale"), "bg-warn", t("cgv_lg_stale"), "text-amber-300")
+    + legendItem(cnt("never"), "border-2 border-muted", cgPlural(cnt("never"), "cgv_lg_never"));
+  const row = ({ w, s }: { w: CgWorker; s: St }): string => {
+    const dot = s === "never"
+      ? `<span class="w-2 h-2 rounded-full border-2 border-muted shrink-0" aria-hidden="true"></span>`
+      : `<span class="w-2.5 h-2.5 rounded-full shrink-0 ${DOT[s]}" aria-hidden="true"></span>`;
+    const age = s === "never"
+      ? `<span class="block text-xs text-slate-400">${t("cgv_never")}</span>`
+      : `<span class="block text-xs ${s === "stale" ? "text-amber-300 font-semibold" : "text-slate-300"}">${w.ageMin == null ? "—" : cgAgo(w.ageMin)}</span>`;
+    const normMin = CG_WORKER_NORM_MIN[w.key];
+    const pct = s === "run" && w.total ? Math.min(100, Math.round(((w.processed ?? 0) / w.total) * 100)) : 0;
+    const prog = s === "run" && w.total
+      ? `<div class="flex items-center gap-2 pl-5 text-[11px] text-blue-300"><span class="flex-1 h-1 rounded bg-edge overflow-hidden" aria-hidden="true"><span class="block h-full bg-accent rounded" style="width:${pct}%"></span></span>${t("cgv_running", { n: String(w.processed ?? 0), total: String(w.total) })}</div>`
+      : "";
+    // Назва — в один рядок (… якщо не влазить); праворуч стовпчиком «коли оновлено» і норма.
+    return `<div class="flex flex-col gap-1 py-1.5 border-b border-edge/60"><div class="flex items-center gap-2.5 text-[13px]">${dot}<span class="flex-1 min-w-0 truncate" title="${escAttr(cgWorkerName(w))}">${cgWorkerName(w)}</span><span class="text-right whitespace-nowrap leading-tight">${age}<span class="block text-[11px] text-slate-400">${normMin ? cgNorm(normMin) : ""}</span></span></div>${prog}</div>`;
+  };
+  return `<div class="bg-panel2 border border-edge rounded-xl p-3 flex flex-col gap-2.5">
+    <div class="flex items-center justify-between"><span class="text-xs font-semibold text-slate-300 tracking-wide">${t("cgv_proc")}</span><span class="text-[11px] font-semibold rounded-full px-2.5 py-0.5 ${pill}">${t("cgv_working", { n: String(h.healthy), total: String(h.total) })}</span></div>
+    <div class="grid gap-1" style="grid-template-columns:repeat(${rows.length},minmax(0,1fr))" aria-hidden="true">${rows.map((r) => `<span class="h-2 rounded ${DOT[r.s]}"></span>`).join("")}</div>
+    <div class="flex flex-wrap gap-3 text-[11px] text-slate-400">${legend}<span class="ml-auto">${t("cgv_hdr_age")}</span></div>
+    <div class="flex flex-col border-t border-edge">${rows.map(row).join("")}</div>
+  </div>`;
+}
+
+function cgGroupCard(g: CgGroup, i: number): string {
+  const n = i + 1;
+  const isAsset = !!g.id?.startsWith("AST:");
+  const type = isAsset
+    ? `<span class="text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap bg-accent/15 text-blue-300">${t("cgv_type_asset")}</span>`
+    : /^W\d+$/.test(g.id ?? "") ? `<span class="text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap bg-fuchsia-500/15 text-fuchsia-300">${t("cgv_type_desk")}</span>` : "";
+  const sizeTxt = `${fmtNum(g.size, 0)} ${cgPlural(g.size, isAsset ? "cgv_whales" : "cgv_wallets")}`;
+
+  // Контроль емісії — частка з controlledEmission (обидва джерела груп її заповнюють).
+  const em = [...(g.controlledEmission ?? [])].sort((a, b) => b.share - a.share);
+  const emRows = em.slice(0, 3).map((e) => `<div class="grid items-center gap-2 text-xs" style="grid-template-columns:48px minmax(0,1fr) 40px"><b class="text-[13px] text-blue-200 truncate">${escAttr(e.symbol)}</b><span class="h-1.5 rounded bg-edge overflow-hidden" aria-hidden="true"><span class="block h-full bg-accent rounded" style="width:${Math.min(100, e.share * 100)}%"></span></span><span class="text-right font-semibold">${cgPct(e.share)}</span></div>`).join("")
+    + (em.length > 3 ? `<span class="text-[11px] text-slate-400">${t("cgv_more", { n: String(em.length - 3) })}</span>` : "");
+  const emBlock = em.length
+    ? `<div class="flex flex-col gap-1.5"><span class="text-[11px] text-slate-400">${t("cgv_emission")}</span>${emRows}</div>`
+    : g.commonAssets.length ? `<div class="text-[11px] text-slate-400">${t("cg_assets")}: <span class="text-slate-300">${g.commonAssets.map(escAttr).join(", ")}</span></div>` : "";
+
+  // Склад: ядро (role core / g.cores) проти решти холдерів. Без ролей — не показуємо.
+  const hasRoles = g.cores != null || g.members.some((m) => m.role);
+  const core = g.cores ?? g.members.filter((m) => m.role === "core").length;
+  const holders = Math.max(0, g.size - core);
+  const comp = hasRoles
+    ? `<div class="flex flex-col gap-1.5"><div class="flex justify-between text-[11px] text-slate-400"><span>${t("cgv_comp")}</span><span><span class="text-green-300">${t("cgv_core_n", { n: String(core) })}</span> · ${holders} ${cgPlural(holders, "cgv_holders")}</span></div><div class="flex h-1.5 rounded overflow-hidden gap-0.5" aria-hidden="true"><span class="block h-full bg-good" style="flex:${core}"></span>${holders ? `<span class="block h-full bg-muted" style="flex:${holders}"></span>` : ""}</div></div>`
+    : "";
+
+  // Учасники: перші 3, решта розкривається кнопкою. `count` навмисно не виводимо:
+  // у груп із rgassetgroups це частка емісії в ‰, у rgpublish — завжди 1.
+  const SHOW = 3;
+  const extra = Math.max(0, g.members.length - SHOW);
+  const roleBadge = (r?: string): string => r === "core"
+    ? `<span class="text-[11px] font-semibold text-green-300 bg-good/15 rounded-md px-1.5 min-w-[44px] text-center">${t("cgv_core")}</span>`
+    : r === "holder" ? `<span class="text-[11px] font-semibold text-slate-300 bg-slate-500/20 rounded-md px-1.5 min-w-[44px] text-center">${t("cgv_holder")}</span>` : "";
+  const members = g.members.map((m, k) => `<div class="flex items-center gap-2 text-xs${k >= SHOW ? " hidden" : ""}"${k >= SHOW ? " data-cg-extra" : ""}>${roleBadge(m.role)}<span data-wallet-addr="${escAttr(m.address)}" class="font-mono text-slate-300 cursor-pointer hover:text-accent truncate">${m.label ? escAttr(m.label) : shortAddr(m.address)}</span></div>`).join("")
+    + (g.size > g.members.length ? `<span class="text-[11px] text-slate-400${extra ? " hidden" : ""}"${extra ? " data-cg-extra" : ""}>${t("cgv_shown", { n: String(g.members.length), total: String(g.size) })}</span>` : "")
+    + (extra ? `<button type="button" data-cg-more aria-expanded="false" data-more="${escAttr(`${t("cgv_more", { n: String(extra) })} ${cgPlural(extra, "cgv_wallets")}`)}" data-less="${escAttr(t("cgv_less"))}" class="self-start text-xs text-blue-300 hover:underline">${t("cgv_more", { n: String(extra) })} ${cgPlural(extra, "cgv_wallets")}</button>` : "");
+
+  // Вкладки — лише коли є що перевіряти (≥2 учасники), як і колишні кнопки.
+  const canAct = g.members.length >= 2;
+  const tabs = canAct
+    ? `<div role="tablist" aria-label="${escAttr(t("cgv_tabs_label", { n: String(n) }))}" class="grid grid-cols-3 gap-1 bg-panel border border-edge rounded-[10px] p-[3px]">${(["members", "link", "coord"] as const).map((id) => `<button type="button" role="tab" data-cg-tab="${id}" aria-selected="${id === "members"}" class="${CG_TAB_BASE} ${id === "members" ? CG_TAB_ACTIVE[id] : CG_TAB_IDLE}">${t("cgv_tab_" + id)}</button>`).join("")}</div>`
+    : "";
+  const panels = `<div data-cg-panel="members" class="flex flex-col gap-1">${members}</div>`
+    + (canAct ? `<div data-cg-panel="link" data-cg-res class="hidden"></div><div data-cg-panel="coord" data-cg-res class="hidden"></div>` : "");
+
+  return `<article data-cg-card data-cg-pair="${escAttr(g.members[0]?.address ?? "")}|${escAttr(g.members[1]?.address ?? "")}" data-cg-addrs="${escAttr(g.members.map((m) => m.address).join(","))}" class="bg-panel2 border border-edge rounded-xl p-3 flex flex-col gap-2.5">
+    <div class="flex flex-wrap items-center gap-1.5"><span class="text-[11px] font-bold text-white bg-blue-600 rounded-md px-2 py-0.5 whitespace-nowrap">${cgNth(n)}</span>${type}<span class="ml-auto text-xs text-slate-300 whitespace-nowrap">${sizeTxt}</span></div>
+    ${emBlock}${comp}${tabs}<div role="tabpanel">${panels}</div>
+  </article>`;
+}
+
+/** Перемкнути вкладку картки групи; «Зв'язок»/«Координацію» вантажимо при першому відкритті. */
+export function selectGroupTab(btn: HTMLElement): void {
+  const card = btn.closest<HTMLElement>("[data-cg-card]");
+  const id = btn.dataset.cgTab as CgTab | undefined;
+  if (!card || !id) return;
+  card.querySelectorAll<HTMLElement>("[data-cg-tab]").forEach((b) => {
+    const on = b === btn;
+    b.setAttribute("aria-selected", String(on));
+    b.className = `${CG_TAB_BASE} ${on ? CG_TAB_ACTIVE[b.dataset.cgTab as CgTab] : CG_TAB_IDLE}`;
+  });
+  card.querySelectorAll<HTMLElement>("[data-cg-panel]").forEach((p) => p.classList.toggle("hidden", p.dataset.cgPanel !== id));
+  const panel = card.querySelector<HTMLElement>(`[data-cg-panel="${id}"]`);
+  if (!panel || panel.childElementCount) return; // уже завантажено або вантажиться
+  if (id === "link") {
+    const [from, to] = (card.dataset.cgPair || "").split("|");
+    if (from && to) void checkGroupLink(from, to, panel);
+  } else if (id === "coord" && card.dataset.cgAddrs) {
+    void checkGroupCoordination(card.dataset.cgAddrs, panel);
+  }
+}
+
+/** «Спробувати ще раз» після помилки вкладки: очистити панель і завантажити знову. */
+export function retryGroupTab(btn: HTMLElement): void {
+  const card = btn.closest<HTMLElement>("[data-cg-card]");
+  const id = btn.dataset.cgRetry as CgTab | undefined;
+  const panel = id && card?.querySelector<HTMLElement>(`[data-cg-panel="${id}"]`);
+  const tab = id && card?.querySelector<HTMLElement>(`[data-cg-tab="${id}"]`);
+  if (!panel || !tab) return;
+  panel.innerHTML = "";
+  selectGroupTab(tab);
+}
+
+/** «+ ще N гаманців» ↔ «Згорнути» у вкладці «Учасники». */
+export function toggleGroupMembers(btn: HTMLElement): void {
+  const card = btn.closest<HTMLElement>("[data-cg-card]");
+  if (!card) return;
+  const open = btn.getAttribute("aria-expanded") !== "true";
+  card.querySelectorAll<HTMLElement>("[data-cg-extra]").forEach((x) => x.classList.toggle("hidden", !open));
+  btn.setAttribute("aria-expanded", String(open));
+  btn.textContent = (open ? btn.dataset.less : btn.dataset.more) || "";
+}
+
 export async function loadCapitalGroups(): Promise<void> {
   const el = document.getElementById("capital-groups");
   if (!el) return;
   el.innerHTML = `<div class="text-[11px] text-slate-500">${t("cg_loading")}</div>`;
   try {
     const [d, af, wc, hist, gdb, dg, feat, wf, cond, cnets, hlth] = await Promise.all([
-      getJSON<{ groups: Array<{ size: number; members: Array<{ address: string; label: string | null; count: number }>; commonAssets: string[] }> }>("/api/capital-groups"),
+      getJSON<{ groups: CgGroup[]; _freshness?: { exists: boolean; ageSec: number } }>("/api/capital-groups"),
       getJSON<{ status?: { cycle: number; processed: number; total: number; running: boolean }; assets: Array<{ symbol: string; rank: number; groups: Array<{ combinedShare: number; members: Array<{ addr: string; share: number }>; commonFunders: Array<{ funder: string; avgUsd: number }> }> }> }>("/api/asset-forensics").catch((): { status?: { cycle: number; processed: number; total: number; running: boolean }; assets: never[] } => ({ assets: [] })),
       getJSON<{ clusters: Array<{ id: string; label: string; combinedUsd: number; assets: string[]; assetCount: number; members: Array<{ addr: string; totalUsd: number; top: string[] }>; evidence: { mirrorPairs: number; sharedFunders: Array<{ funder: string }> } }> }>("/api/whale-clusters").catch(() => ({ clusters: [] as never[] })),
       getJSON<{ series: Array<{ t: number; count: number }> }>("/api/history", { key: "clusters" }).catch(() => ({ series: [] as never[] })),
@@ -692,7 +883,7 @@ export async function loadCapitalGroups(): Promise<void> {
       getJSON<{ groups?: Array<{ combinedUsd: number; ethAccumulator: boolean; members: Array<{ addr: string; totalUsd: number; ethShare: number }> }> }>("/api/whale-finder").catch(() => ({ groups: [] as never[] })),
       getJSON<{ conductors: Array<{ funder: string; assetCount: number; assets: string[]; holderCount: number; maxBackerUsd: number }> }>("/api/conductors").catch(() => ({ conductors: [] as never[] })),
       getJSON<{ networks: CoordNet[] }>("/api/coordinated-networks").catch(() => ({ networks: [] as never[] })),
-      getJSON<{ workers: Array<{ label: string; processed: number | null; total: number | null; ageMin: number | null; ok: boolean }>; healthy: number; total: number } | null>("/api/workers-health").catch(() => null),
+      getJSON<{ workers: CgWorker[]; healthy: number; total: number } | null>("/api/workers-health").catch(() => null),
     ]);
     const fmtUsd = (n: number) => n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? "$" + (n / 1e3).toFixed(0) + "k" : "$" + n;
     const featHtml = (feat?.groups || []).map((g) => { const lbl = /Дириген|Дериген/.test(g.label) ? `🎼 ${t("feat_conductor")}` : g.label; const note = t("feat_note").replace("%1", fmtUsd(g.headUsd)).replace("%2", String((g.assets || []).length)).replace("%3", g.cashout).replace("%4", fmtUsd(g.cashoutUsd)); return `<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 mb-1.5">
@@ -715,7 +906,6 @@ export async function loadCapitalGroups(): Promise<void> {
       </div>`).join("") : "";
     const clHist = (hist?.series || []).filter((p) => typeof p.count === "number");
     const clTrend = clHist.length >= 2 ? ` ${sparkline(clHist.map((p) => p.count), "#22d3ee", 56, 16)}` : "";
-    const dbLine = gdb && gdb.nodes > 0 ? `<div class="text-[10px] text-slate-500 mb-2 flex flex-wrap items-center gap-x-1.5 border-b border-edge/60 pb-1.5">🗄 ${t("gdb_base")}: <b class="text-slate-300">${gdb.nodes.toLocaleString()}</b> ${t("gdb_wallets")} · <b class="text-slate-300">${gdb.edges.toLocaleString()}</b> ${t("gdb_links")}${gdb.volumeUsd ? ` · <b class="text-good">${fmtUsd(gdb.volumeUsd)}</b> ${t("gdb_volume")}` : ""}${gdb.groups ? ` · <b class="text-cyan-300">${gdb.groups}</b> ${t("gdb_groups")}` : ""}</div>` : "";
     // КООРДИНОВАНІ МЕРЕЖІ як клікабельні групи з обсягом усієї групи (лінива статистика по кліку)
     cgNetworks = cnets?.networks || [];
     const netGroupHtml = cgNetworks.length ? `<div class="text-[11px] text-fuchsia-300 mt-1 mb-1 font-semibold">🕸 ${t("net_h")} <span class="text-slate-500 font-normal">${cgNetworks.length}</span></div>` +
@@ -727,9 +917,11 @@ export async function loadCapitalGroups(): Promise<void> {
         <button data-group-flow="${escAttr(members)}" class="text-[11px] text-orange-400 hover:underline">💸 ${t("gf_btn")}</button></div>
         <div data-group-stats class="mt-1.5"></div>
       </div>`; }).join("") : "";
-    const healthLine = hlth ? `<div class="text-[10px] mb-2 flex items-center gap-1.5 ${hlth.healthy === hlth.total ? "text-good" : "text-yellow-400"}" title="${hlth.workers.map((w) => `${w.label}: ${w.processed ?? "?"}/${w.total ?? "?"} (${w.ageMin ?? "?"}хв)`).join("\n")}">${hlth.healthy === hlth.total ? "🟢" : "🟡"} ${t("hp_workers")}: <b>${hlth.healthy}/${hlth.total}</b> ${t("hp_ok")}${hlth.workers.filter((w) => !w.ok).length ? ` · <span class="text-yellow-400">${hlth.workers.filter((w) => !w.ok).map((w) => w.label).join(", ")} ${t("hp_stale")}</span>` : ""}</div>` : "";
     const wcl = wc?.clusters || [];
-    let html = healthLine + dbLine; /* capital-groups only: старі блоки сховано */
+    const groups = [...(d.groups || [])].sort((a, b) => cgTopShare(b) - cgTopShare(a)); // стабільне: без емісії — у вихідному порядку
+    const fresh = d._freshness;
+    const freshLine = `<div class="flex items-center gap-1.5 text-[11px] text-slate-400"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>${fresh?.exists && fresh.ageSec >= 0 ? t("cgv_fresh", { ago: cgAgo(fresh.ageSec / 60) }) : t("cgv_fresh_none")}</div>`;
+    let html = freshLine + cgKpis(groups.length, gdb) + cgWorkersPanel(hlth); /* capital-groups only: старі блоки сховано */
     if (false && wcl.length) {
       html += `<div class="text-[11px] text-cyan-300 mb-1 font-semibold flex items-center gap-1">${t("wc_h")} <span class="text-slate-500 font-normal">${wcl.length}</span>${clTrend}</div>` +
         wcl.slice(0, 12).map((c) => `<div class="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-2 mb-1.5">
@@ -748,15 +940,10 @@ export async function loadCapitalGroups(): Promise<void> {
           <div class="truncate">${g.members.slice(0, 6).map((m) => `<span data-wallet-addr="${escAttr(m)}" class="text-[11px] font-mono text-slate-500 cursor-pointer hover:text-accent mr-1.5">${shortAddr(m)}</span>`).join("")}</div>
         </div>`).join("");
     }
-    html += (d.groups || []).map((g, i) => `<div class="rounded-lg border border-edge bg-panel2 p-2">
-        <div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-accent">🏛 ${t("cg_title")} ${i + 1}</span><span class="text-[11px] text-slate-500">${g.size} ${t("cg_members")}</span></div>
-        ${g.commonAssets.length ? `<div class="text-[11px] text-slate-400 mb-1">${t("cg_assets")}: <span class="text-slate-300">${g.commonAssets.join(", ")}</span></div>` : ""}
-        ${g.members.slice(0, 6).map((m) => `<div class="text-[11px] text-slate-500 truncate"><span data-wallet-addr="${escAttr(m.address)}" class="font-mono cursor-pointer hover:text-accent">${m.label || shortAddr(m.address)}</span> · ${m.count}</div>`).join("")}
-        ${g.members.length >= 2 ? `<div class="flex gap-1 mt-1.5">
-          <button data-cg-link="${escAttr(g.members[0].address)}|${escAttr(g.members[1].address)}" class="flex-1 text-[11px] px-1.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 transition">${t("cg_check")}</button>
-          <button data-cg-coord="${escAttr(g.members.map((m) => m.address).join(","))}" class="flex-1 text-[11px] px-1.5 py-1 rounded bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 transition">${t("cg_coord")}</button>
-        </div><div data-cg-res class="text-[11px] mt-1 space-y-0.5"></div>` : ""}
-      </div>`).join("");
+    html += `<div class="flex items-baseline justify-between pt-1"><span class="text-[13px] font-semibold">${t("cgv_found")} <span class="text-slate-400 font-normal">· ${groups.length}</span></span>${groups.some((g) => g.controlledEmission?.length) ? `<span class="text-[11px] text-slate-400">${t("cgv_sorted")}</span>` : ""}</div>`
+      + (groups.length
+        ? groups.map(cgGroupCard).join("")
+        : `<div class="border border-dashed border-edge rounded-xl p-4 flex items-center gap-3"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0"><circle cx="6" cy="7" r="2.5"></circle><circle cx="18" cy="7" r="2.5"></circle><circle cx="12" cy="17" r="2.5"></circle><path d="M8.2 8.4l2.6 6.4M15.8 8.4l-2.6 6.4M8.5 7h7"></path></svg><div class="flex flex-col gap-0.5"><div class="text-[13px] font-semibold">${t("cgv_empty_t")}</div><div class="text-xs text-slate-400 leading-snug">${t("cgv_empty_h")}</div></div></div>`);
     const fa = af?.assets || [];
     if (false && fa.length) {
       html += `<div class="text-[11px] text-slate-400 mt-3 mb-1 font-medium">${t("cg_forensics_h")}${af.status ? ` <span class="text-slate-500 font-normal">${af.status.running ? "⟳ " : ""}${af.status.processed}/${af.status.total}</span>` : ""}</div>` +
@@ -899,29 +1086,50 @@ function renderMoneyExits(d: MoneyTrace): void {
   panel.querySelector("#gd-close")?.addEventListener("click", () => panel.classList.add("translate-x-full"));
 }
 
+const cgBusy = (): string => `<div class="text-xs text-slate-400 py-1">${t("cg_checking")}</div>`;
+/** Помилка вкладки: тайм-аут getJSON (60 с) пояснюємо окремо; повтор — кнопкою, без перезавантаження сторінки. */
+const cgFail = (e: unknown, tab: CgTab): string =>
+  `<div class="flex flex-col gap-2 py-1"><span class="text-xs text-bad leading-snug">${e instanceof Error && e.message === "timeout" ? t("cgv_timeout") : t("conc_err")}</span><button type="button" data-cg-retry="${tab}" class="self-start min-h-[32px] px-2.5 rounded-lg border border-edge text-xs text-blue-300 hover:border-accent transition">${t("cgv_retry")}</button></div>`;
+
 export async function checkGroupLink(from: string, to: string, resEl: HTMLElement): Promise<void> {
-  resEl.textContent = t("cg_checking");
+  resEl.innerHTML = cgBusy();
   try {
     const d = await getJSON<{ found: boolean; path?: string[]; hops?: number; pattern?: { type: string; note: string } }>("/api/connection-path", { from, to, maxHops: 15 });
+    const box = (inner: string): string => `<div class="bg-accent/10 border border-accent/30 rounded-[10px] p-2.5 flex flex-col gap-2">${inner}</div>`;
     if (d.found && d.path) {
-      const pat = d.pattern && (d.pattern.type === "peel_chain" || d.pattern.type === "gas_funding") ? ` · <span class="${d.pattern.type === "peel_chain" ? "text-bad font-semibold" : "text-yellow-400"}">${t("cg_pat_" + d.pattern.type)}</span>` : "";
-      resEl.innerHTML = `<span class="text-good">🔗 ${t("cg_linked")} ${d.hops} ${t("cg_hops")}</span>${pat}`;
-      openConnectionGraph(d.path);
-    } else { resEl.innerHTML = `<span class="text-slate-500">${t("cg_nolink")}</span>`; }
-  } catch { resEl.textContent = t("conc_err"); }
+      const path = d.path;
+      const hops = d.hops ?? path.length - 1;
+      const pat = d.pattern && (d.pattern.type === "peel_chain" || d.pattern.type === "gas_funding")
+        ? `<span class="ml-auto text-[11px] font-semibold rounded-full px-2 py-0.5 whitespace-nowrap ${d.pattern.type === "peel_chain" ? "text-red-300 bg-bad/15" : "text-amber-300 bg-warn/15"}">${t("cg_pat_" + d.pattern.type)}</span>` : "";
+      const nodes = path.map((a, k) => {
+        const end = k === 0 || k === path.length - 1;
+        return `<div class="flex items-center gap-2 text-xs min-h-[22px]"><span class="${end ? "w-2.5 h-2.5 bg-accent" : "w-2 h-2 border-2 border-muted"} rounded-full shrink-0" aria-hidden="true"></span><span data-wallet-addr="${escAttr(a)}" class="font-mono text-slate-200 cursor-pointer hover:text-accent">${shortAddr(a)}</span><span class="ml-auto text-[11px] text-slate-400">${t(end ? "cgv_member" : "cgv_hop")}</span></div>`;
+      }).join("");
+      resEl.innerHTML = box(`<div class="flex items-center gap-2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#86efac" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path></svg><span class="text-[13px] font-semibold text-green-300">${t("cg_linked")} ${hops} ${cgPlural(hops, "cgv_hops")}</span>${pat}</div>`
+        + `<div class="text-[11px] text-slate-400">${t("cgv_path_between")}</div><div class="flex flex-col">${nodes}</div>`
+        + `<button type="button" data-cg-showpath class="min-h-[34px] rounded-lg border border-accent/45 bg-accent/15 text-blue-200 text-xs hover:bg-accent/25 transition">${t("cgv_show_path")}</button>`);
+      // Граф шляху — за кнопкою, а не одразу: вкладка лишається читабельною.
+      resEl.querySelector("[data-cg-showpath]")?.addEventListener("click", () => openConnectionGraph(path));
+    } else {
+      resEl.innerHTML = box(`<div class="text-[13px] font-semibold text-slate-300">${t("cg_nolink")}</div><div class="text-xs text-slate-400 leading-snug">${t("cgv_nolink_hint")}</div>`);
+    }
+  } catch (e) { resEl.innerHTML = cgFail(e, "link"); }
 }
 
 export async function checkGroupCoordination(addresses: string, resEl: HTMLElement): Promise<void> {
-  resEl.textContent = t("cg_checking");
+  resEl.innerHTML = cgBusy();
   try {
     const d = await getJSON<{ score: number; commonFunders: Array<{ funder: string; count: number; type: string; avgUsd: number }>; directFunding: unknown[] }>("/api/group-coordination", { addresses });
-    const verdict = d.score >= 60
-      ? `<span class="text-bad font-semibold">⚠ ${t("cg_likely")} · ${d.score}</span>`
-      : `<span class="text-slate-400">${t("cg_weak")} · ${d.score}</span>`;
+    const likely = d.score >= 60;
     const usdFmt = (u: number) => (u >= 1000 ? "$" + (u / 1000).toFixed(1) + "k" : "$" + u);
-    resEl.innerHTML = `${verdict}<div class="text-slate-400">${d.commonFunders.length} ${t("cg_common")} · ${d.directFunding.length} ${t("cg_direct")}</div>` +
-      d.commonFunders.slice(0, 4).map((c) => `<div class="text-slate-500 truncate">↳ <span data-wallet-addr="${escAttr(c.funder)}" class="font-mono cursor-pointer hover:text-accent">${shortAddr(c.funder)}</span> → ${c.count} <span class="${c.type === "value" ? "text-bad" : "text-slate-600"}">${t("cg_funder_" + c.type)}${c.avgUsd ? " " + usdFmt(c.avgUsd) : ""}</span></div>`).join("");
-  } catch { resEl.textContent = t("conc_err"); }
+    const funders = d.commonFunders.slice(0, 4).map((c) => `<div class="flex items-center gap-2 text-xs"><span data-wallet-addr="${escAttr(c.funder)}" class="font-mono text-slate-200 cursor-pointer hover:text-accent">${shortAddr(c.funder)}</span><span class="text-slate-400">→ ${c.count} ${cgPlural(c.count, "cgv_wallets")}</span><span class="text-[11px] font-semibold rounded-md px-1.5 ${c.type === "value" ? "text-red-300 bg-bad/15" : "text-slate-300 bg-slate-500/20"}">${t("cg_funder_" + c.type)}</span>${c.avgUsd ? `<span class="ml-auto text-slate-300">${usdFmt(c.avgUsd)}</span>` : ""}</div>`).join("");
+    resEl.innerHTML = `<div class="bg-fuchsia-500/10 border border-fuchsia-500/30 rounded-[10px] p-2.5 flex flex-col gap-2">
+      <div class="flex items-baseline gap-2"><span class="text-[13px] font-semibold ${likely ? "text-red-300" : "text-slate-300"}">${t(likely ? "cg_likely" : "cg_weak")}</span><span class="ml-auto text-xs text-slate-400"><b class="text-[15px] text-slate-100">${d.score}</b> / 100</span></div>
+      <span class="block h-1.5 rounded bg-edge overflow-hidden" aria-hidden="true"><span class="block h-full rounded ${likely ? "bg-bad" : "bg-muted"}" style="width:${Math.max(0, Math.min(100, d.score))}%"></span></span>
+      <div class="text-xs text-slate-300">${d.commonFunders.length} ${cgPlural(d.commonFunders.length, "cgv_funders")} · ${d.directFunding.length} ${t("cg_direct")}</div>
+      ${funders ? `<div class="flex flex-col gap-1">${funders}</div>` : ""}
+    </div>`;
+  } catch (e) { resEl.innerHTML = cgFail(e, "coord"); }
 }
 
 export async function openPlayersGraph(): Promise<void> {

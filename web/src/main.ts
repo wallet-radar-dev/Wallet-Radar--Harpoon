@@ -43,7 +43,7 @@ import { openEventModal, openGroupAlert, closeEventModal } from "./event-modal";
 import {
   openGraph, closeGraph, openGraphForWallet, openSmartMoney,
   loadCapitalGroups, openMoneyTraceGraph, loadGroupStats, refreshNodeOnUpdate, refreshGraphLang,
-  openNetworkGraph, openGroupFlowGraph, checkGroupLink, checkGroupCoordination,
+  openNetworkGraph, openGroupFlowGraph, checkGroupLink, checkGroupCoordination, selectGroupTab, toggleGroupMembers, retryGroupTab,
   clearFocus, focusWallet, removeGraphWallet, closeNodeDetail, setupGraphInteractions, cgNetworkAt,
 } from "./graph";
 import {
@@ -475,6 +475,13 @@ function init(): void {
     if (ng?.dataset.netGraphCg) { const n = cgNetworkAt(Number(ng.dataset.netGraphCg)); if (n) openNetworkGraph(n); return; }
     const gfb = el.closest<HTMLElement>("[data-group-flow]");
     if (gfb?.dataset.groupFlow) { void openGroupFlowGraph(gfb.dataset.groupFlow); return; }
+    // картка групи: вкладки «Учасники / Зв'язок / Координація» і «+ ще N»
+    const cgTab = el.closest<HTMLElement>("[data-cg-tab]");
+    if (cgTab) { selectGroupTab(cgTab); return; }
+    const cgMore = el.closest<HTMLElement>("[data-cg-more]");
+    if (cgMore) { toggleGroupMembers(cgMore); return; }
+    const cgRetry = el.closest<HTMLElement>("[data-cg-retry]");
+    if (cgRetry) { retryGroupTab(cgRetry); return; }
     const res = el.closest<HTMLElement>(".rounded-lg")?.querySelector<HTMLElement>("[data-cg-res]");
     if (!res) return;
     const link = el.closest<HTMLElement>("[data-cg-link]");
