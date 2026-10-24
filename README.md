@@ -83,6 +83,9 @@ Tracks wallets across many networks:
 The key feature is **detection of "desks" and capital groups**: finding coordinated whales,
 merging sub-networks, classifying archetypes, monthly activity, and an intelligence page with a
 live force graph (`/network.html`).
+On the main screen, the **Capital groups** block shows each group's share of controlled
+emission and its core/holder composition, with tabs to check the on-chain path between
+members and their coordination (common funders).
 
 <a name="en-arch"></a>
 ## 🏗 Architecture
@@ -331,6 +334,9 @@ Proprietary. © 2026 Vitalii Vedana. All rights reserved. See [`LICENSE`](LICENS
 Ключова риса — **детекція «десків» і капітал-груп**: пошук координованих китів, злиття
 під-мереж, класифікація архетипів, помісячна активність, розвідсторінка з живим force-графом
 (`/network.html`).
+На головному екрані блок **«Групи капіталу»** показує частку контрольованої емісії й склад
+кожної групи (ядро / холдери), а вкладки перевіряють ончейн-шлях між учасниками та їхню
+координацію (спільні фандери).
 
 <a name="ua-arch"></a>
 ## 🏗 Архітектура
