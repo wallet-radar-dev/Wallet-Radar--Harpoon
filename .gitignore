@@ -79,3 +79,4 @@ dataset/retro/
 # уже підвів: wr-store/target і patterns/target у ньому не значились, і при першій же
 # спробі закомітити крейт в індекс полізли тисячі файлів .fingerprint.
 target/
+seed/

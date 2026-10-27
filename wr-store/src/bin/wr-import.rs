@@ -2,6 +2,7 @@
 //!
 //!   wr-import extract   .rs → wr-store/seed/*.json   (те, що можна переглянути очима)
 //!   wr-import load      seed + dataset → wallet-radar.db
+//!   wr-import init      порожня БД з міграціями (без seed; довідники порожні — для запуску UI)
 //!   wr-import verify    звірка в ОБИДВА боки + перелік того, що ще лишилось у коді
 //!
 //! Головний принцип: жодна адреса не переписується руками. Помилка транскрипції
@@ -858,6 +859,20 @@ fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
 }
 
+/// Порожня база з накоченими міграціями — без жодного рядка довідників. Для Docker-стеку,
+/// де seed-файлів авторів немає: сервер стартує й віддає UI, але пороги/теги порожні, і
+/// `store.validate()` на старті чесно перелічить, чого бракує. Наявну базу НЕ чіпає.
+fn cmd_init() -> Result<()> {
+    let path = wr_store::db_path();
+    if path.exists() {
+        println!("init: {} вже існує — не чіпаю", path.display());
+        return Ok(());
+    }
+    wr_store::open_or_create(&path)?;
+    println!("init: створено порожню базу {}", path.display());
+    Ok(())
+}
+
 fn cmd_load() -> Result<()> {
     let path = wr_store::db_path();
     let mut c = wr_store::open_or_create(&path)?;
@@ -1653,10 +1668,11 @@ fn main() -> Result<()> {
     match cmd.as_str() {
         "extract" => cmd_extract(),
         "load" => cmd_load(),
+        "init" => cmd_init(),
         "verify" => cmd_verify(),
         "mirror" => cmd_mirror(),
         _ => {
-            eprintln!("вжиток: wr-import extract | load | verify | mirror");
+            eprintln!("вжиток: wr-import extract | load | init | verify | mirror");
             std::process::exit(2);
         }
     }

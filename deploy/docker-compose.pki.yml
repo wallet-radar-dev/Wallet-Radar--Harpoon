@@ -1,0 +1,34 @@
+# Оверлей до docker-compose.satellites.yml для локального стеку (підключається з кореневого
+# docker-compose.yml через include). На проді НЕ використовується: там PKI видає
+# deploy/pki/gen-certs.sh руками, а сателіти піднімає окремий файл без цього оверлею.
+#
+# pki-init видає mTLS-сертифікати в deploy/pki/out (та сама тека, що й на проді, у .gitignore)
+# і завершується. Скрипт ідемпотентний: наявні сертифікати не чіпає. Сателіти й кор стартують
+# лише після його успішного завершення — інакше вони б падали на читанні ca.crt.
+services:
+  pki-init:
+    image: alpine:3.20
+    container_name: pki-init
+    working_dir: /pki
+    volumes:
+      - ./pki:/pki
+    # Копія з вилученим CR: на Windows із autocrlf gen-certs.sh приїжджає з CRLF і bash на ньому падає.
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache bash openssl >/dev/null
+        sed 's/\r$//' gen-certs.sh > .gen-certs.run.sh
+        bash .gen-certs.run.sh
+        rm -f .gen-certs.run.sh
+    restart: "no"
+
+  satellite-a:
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+
+  satellite-b:
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully

@@ -185,11 +185,34 @@ npm run build     # typecheck (tsc) + esbuild (web/src/main.ts → web/app.js) +
 
 The Rust server serves the `web/` static files and the API from the same port `:3000`.
 
-### Local Docker (legacy, for reference)
+### Local Docker (whole stack)
 
-`docker-compose.yml` builds the **old Node version** — this is not production. Its `Dockerfile`
-copies `server/` and `dataset/`, which are **not in the public repository**, so it does not build
-here. For production behaviour use Rust + satellites.
+```bash
+cp deploy/.env.example deploy/.env   # satellite API keys (empty is fine: they report configured=false)
+docker compose up --build            # http://localhost:3000
+```
+
+The only manual step is `deploy/.env` (compose fails if it is missing, and `*.env` is gitignored).
+
+This starts `pki-init` (one-shot: issues the mTLS certificates into `deploy/pki/out`), `store-init`
+(one-shot: creates the reference database), both satellites, and the Rust core with the built
+frontend. The core runs in strict satellite mode, like production. Only the four key-free workers
+from `.env.example` are on by default; production runs all 20 (including a ~204 GB backup worker),
+so enable the rest in `.env` on purpose. Optional core secrets (Telegram, Sentry, passwords) go
+into a root `.env`.
+
+**Database.** The reference store is an embedded SQLite file (`wr-store`, `WR_DB`), not a database
+server — Postgres/MS SQL are not supported by the code. `store-init` creates it in the `store`
+volume, picking the first available source in `./seed/`:
+1. `wallet-radar.db` — a ready database from the authors, copied as is;
+2. `constants.json`, `real-money.json`, `universe.json`, … — the authors' seed files, loaded with `wr-import load`;
+3. nothing — an **empty, migrated** database (`wr-import init`). The UI starts, but there are no
+   wallets, groups, thresholds or tags, and the keyed sources stay empty. The core logs the missing tags.
+
+The public repository contains neither (1) nor (2), so a plain clone gets (3). To switch to real
+data, put the files into `./seed/` and run `docker compose down -v && docker compose up` — an existing
+database is never overwritten, so `-v` is required. `rust-server/src/groupgraph.rs` is a stub in the
+public version: `/api/group-graph` answers `501`.
 
 <a name="en-config"></a>
 ## ⚙️ Configuration and secrets
@@ -436,11 +459,33 @@ npm run build     # typecheck (tsc) + esbuild (web/src/main.ts → web/app.js) +
 
 Rust-сервер віддає статику `web/` та API з одного порту `:3000`.
 
-### Локальний Docker (легасі, довідково)
+### Локальний Docker (весь стек)
 
-`docker-compose.yml` збирає **стару Node-збірку** — це не прод. Її `Dockerfile` копіює `server/`
-і `dataset/`, яких **немає в публічному репозиторії**, тож тут вона не збирається. Для
-відтворення прод-поведінки використовуйте Rust + сателіти.
+```bash
+cp deploy/.env.example deploy/.env   # ключі API сателітів (порожні — не помилка: configured=false)
+docker compose up --build            # http://localhost:3000
+```
+
+Єдиний ручний крок — `deploy/.env` (без нього compose не стартує, а `*.env` у `.gitignore`).
+
+Піднімаються `pki-init` (разово видає mTLS-сертифікати в `deploy/pki/out`), `store-init` (разово
+створює базу довідників), обидва сателіти й Rust-кор із зібраним фронтендом. Кор працює в суворому
+режимі сателітів, як на проді. За замовчуванням увімкнені лише чотири воркери без ключів із
+`.env.example`; прод крутить усі 20 (разом із бекапом на ~204 ГБ), тож решту вмикайте в `.env`
+свідомо. Необов'язкові секрети кора (Telegram, Sentry, паролі) — у кореневому `.env`.
+
+**База.** Сховище довідників — вбудований файл SQLite (`wr-store`, `WR_DB`), а не сервер БД:
+Postgres/MS SQL код не підтримує. `store-init` створює його в томі `store`, беручи перше доступне
+джерело з `./seed/`:
+1. `wallet-radar.db` — готова база від авторів, копіюється як є;
+2. `constants.json`, `real-money.json`, `universe.json`, … — seed-файли авторів, `wr-import load`;
+3. нічого — **порожня база з міграціями** (`wr-import init`). UI стартує, але без гаманців, груп,
+   порогів і тегів, а джерела з ключами лишаються порожніми. Кор пише в лог, яких тегів бракує.
+
+У публічному репозиторії немає ні (1), ні (2), тож зі свіжого клону вийде (3). Щоб перейти на
+справжні дані, покладіть файли в `./seed/` і виконайте `docker compose down -v && docker compose up`:
+наявну базу ніколи не перезаписують, тому `-v` обов'язковий. `rust-server/src/groupgraph.rs` у
+публічній версії — заглушка: `/api/group-graph` відповідає `501`.
 
 <a name="ua-config"></a>
 ## ⚙️ Конфігурація та секрети
