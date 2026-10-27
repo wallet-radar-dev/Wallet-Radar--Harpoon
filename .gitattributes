@@ -1,0 +1,2 @@
+# Скрипти запускаються в Linux-контейнерах: CRLF ламає shebang.
+*.sh text eol=lf

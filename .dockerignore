@@ -1,7 +1,27 @@
-node_modules
 .git
-.env
-server/data.json
-server/server.log
-npm-debug.log*
+.github
+.claude
+.cursor
+node_modules
+**/target
+docs
 *.log
+npm-debug.log*
+
+# секрети — тільки через env_file / змінні оточення, не в образ
+.env
+*.env
+.env.*
+!.env.example
+deploy/.env
+deploy/pki/out
+
+# стан під час роботи — живе в томах
+dataset
+seed
+wallet-radar.db*
+
+# збирається всередині образу
+web/app.js
+web/app.js.map
+web/app.css

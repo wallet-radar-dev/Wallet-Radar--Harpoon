@@ -2651,6 +2651,10 @@ pub async fn group_graph_route(Query(q): Query<GroupGraphQuery>) -> impl IntoRes
     let v = tokio::task::spawn_blocking(move || crate::groupgraph::build(&root, &id_owned, limit))
         .await
         .unwrap_or_else(|e| json!({"error": format!("збірка графа впала: {e}")}));
+    // `unavailable` ставить лише заглушка groupgraph.rs (публічна збірка) — це не «групи немає».
+    if v.get("unavailable").is_some() {
+        return (StatusCode::NOT_IMPLEMENTED, Json(v)).into_response();
+    }
     if v.get("error").is_some() {
         return (StatusCode::NOT_FOUND, Json(v)).into_response();
     }

@@ -1,31 +1,96 @@
-# Запуск Wallet Radar у Docker.
-#   docker compose up -d --build        — зібрати й запустити у фоні
-#   docker compose logs -f app          — дивитись логи
-#   docker compose down                 — зупинити
+# Wallet Radar одним командою:
+#
+#   docker compose up --build        — зібрати й запустити весь стек
+#   docker compose down              — зупинити (томи лишаються; `down -v` їх стирає)
+#
 # Відкрити: http://localhost:3000
+#
+# Що піднімається:
+#   store-init   — разово створює базу довідників (SQLite у томі store)
+#   pki-init     — разово видає mTLS-сертифікати в deploy/pki/out (ідемпотентно)
+#   satellite-a/b — тримають ключі до Etherscan/Moralis/... (deploy/docker-compose.satellites.yml)
+#   core         — rust-server + фронтенд; до сателітів ходить по gRPC поверх mTLS
+#
+# ПЕРЕД ПЕРШИМ ЗАПУСКОМ (див. README, "Local Docker"):
+#   1. (необов'язково) ./seed/ — готовий wallet-radar.db або seed-файли довідників. Без них
+#      store-init створить ПОРОЖНЮ базу: UI працює, але без гаманців, груп і порогів.
+#   2. deploy/.env (з deploy/.env.example) — ключі API для сателітів. Порожні ключі не помилка:
+#      сателіт чесно відповідає configured=false.
+#   3. .env (з .env.example) — необов'язково: власні секрети кора (Telegram, Sentry, паролі).
+
+include:
+  - path:
+      - deploy/docker-compose.satellites.yml
+      - deploy/docker-compose.pki.yml
+    # Ключі сателітів живуть лише тут, а не в .env кора (docs/satellites.md).
+    env_file: deploy/.env
 
 services:
-  app:
+  # Разово створює базу довідників у томі store (див. deploy/docker/store-init.sh): готова база,
+  # seed-файли або, якщо їх нема, порожня база з міграціями. Бази-сервера тут нема: wr-store — це
+  # вбудований SQLite (rusqlite), файл за WR_DB; Postgres/MS SQL код не підтримує.
+  store-init:
+    image: wallet-radar-core
+    pull_policy: never          # образ збирає сервіс core нижче
+    container_name: wallet-radar-store-init
+    entrypoint: ["store-init.sh"]
+    volumes:
+      - ./seed:/app/seed:ro
+      - store:/app/store
+      - dataset:/app/dataset
+    restart: "no"
+
+  core:
     build: .
-    image: wallet-radar
+    image: wallet-radar-core
     container_name: wallet-radar
+    depends_on:
+      store-init:
+        condition: service_completed_successfully
+      pki-init:
+        condition: service_completed_successfully
+      satellite-a:
+        condition: service_started
+      satellite-b:
+        condition: service_started
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Суворий режим: щойно задано, кор НЕ ходить у Etherscan/Moralis/... напряму (docs/satellites.md).
+      SATELLITE_ENDPOINTS: satellite-a=https://satellite-a:8443,satellite-b=https://satellite-b:8443
+      PKI_DIR: /pki
+      RUST_LOG: ${RUST_LOG:-info}
+      # Воркери за замовчуванням вимкнені в коді. Тут лише ті, що безпечні без ключів у корі
+      # (набір із .env.example); решту вмикайте в .env. Прод вмикає всі 20 — локально це
+      # означає бекап на сотні ГБ і вичавлену квоту API, тому не копіюємо.
+      ENABLE_LABELS_WORKER: ${ENABLE_LABELS_WORKER:-1}
+      ENABLE_BALANCES_WORKER: ${ENABLE_BALANCES_WORKER:-1}
+      ENABLE_FORENSICS_WORKER: ${ENABLE_FORENSICS_WORKER:-1}
+      ENABLE_BACKTEST_WORKER: ${ENABLE_BACKTEST_WORKER:-1}
+      FORENSICS_ASSETS_PER_CYCLE: ${FORENSICS_ASSETS_PER_CYCLE:-12}
+      FORENSICS_HOLDERS: ${FORENSICS_HOLDERS:-20}
+      FORENSICS_FUNDER_CHAINS: ${FORENSICS_FUNDER_CHAINS:-eth,base,arbitrum,optimism,polygon}
     ports:
       - "3000:3000"
-    # Тут беруться ЛИШЕ власні секрети кора (паролі, TELEGRAM_BOT_TOKEN, SENTRY_DSN).
-    # Ключів до Etherscan/Moralis/LunarCrush/Arkham/Glassnode у .env БІЛЬШЕ НЕМАЄ — їх тримають
-    # сателіти (deploy/docker-compose.satellites.yml + deploy/.env, docs/satellites.md). Цей
-    # контейнер — стара Node-збірка; у проді сервер запускає systemd (wallet-radar-rust.service),
-    # і саме там задано SATELLITE_ENDPOINTS. Піднятий без сателітів, він працюватиме на
-    # безключових джерелах.
-    env_file:
-      - .env
-    environment:
-      PORT: "3000"
-      DATA_DIR: /data
     volumes:
-      - wallet-data:/data        # збереження data.json між перезапусками
-      - ./dataset:/app/dataset   # живі датасети (скани/моделі) без перезбірки образу
+      - ./deploy/pki/out:/pki:ro
+      - store:/app/store           # wallet-radar.db
+      - dataset:/app/dataset       # дані воркерів (скани, моделі, журнали)
+      - data:/app/data             # data.json
+    networks: [orbit]
+    # Воркери пишуть dataset/*.json; SIGTERM дає їм дописати файл, а не лишити його обрізаним
+    # (те саме, що TimeoutStopSec=30 у deploy/wallet-radar-rust.service).
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
-  wallet-data:
+  store:
+  dataset:
+  data:
