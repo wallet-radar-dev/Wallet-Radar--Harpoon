@@ -682,6 +682,7 @@ mod tests {
 
     #[test]
     fn the_first_scan_is_silent_but_still_records_what_it_saw() {
+        store_or_skip!();
         let mut seen = indexmap::IndexSet::new();
         let ts = [tr(C, "0xaaa", 10.0, 1), tr(C, "0xbbb", 20.0, 2)];
 
@@ -695,6 +696,7 @@ mod tests {
 
     #[test]
     fn only_new_outgoing_non_exchange_transfers_over_1k_alert() {
+        store_or_skip!();
         let mut seen = indexmap::IndexSet::new();
         let ts = [
             tr(C, "0xaaa", 1.0, 1),        // $3000 → alerts

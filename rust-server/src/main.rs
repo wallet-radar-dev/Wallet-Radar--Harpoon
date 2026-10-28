@@ -16,6 +16,18 @@ macro_rules! fixture {
     }};
 }
 
+/// Тест, якому потрібні довідники `wr-store` (`wallet-radar.db`). Seed-дані лежать поза
+/// репозиторієм (`WR_SEED`), тож без бази тест пропускається, а не падає на `snapshot()`.
+#[cfg(test)]
+macro_rules! store_or_skip {
+    () => {
+        if let Err(e) = wr_store::try_snapshot() {
+            eprintln!("SKIP: довідники wr-store недоступні ({e})");
+            return;
+        }
+    };
+}
+
 // Compute modules are complete and golden-tested but not yet wired into request
 // paths (workers and network routes come in later slices) — allow dead_code
 // until then rather than blanket-suppressing it crate-wide.

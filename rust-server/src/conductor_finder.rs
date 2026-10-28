@@ -194,6 +194,7 @@ mod tests {
     /// two funders back two assets each, but only one reuses the same wallets.
     #[test]
     fn a_funder_who_never_reuses_a_wallet_is_a_dispenser_not_a_conductor() {
+        store_or_skip!();
         let labels = Labels::load(Path::new("/nonexistent")); // no labels → behaviour alone decides
         let conductor = "0x1111111111111111111111111111111111111111";
         let dispenser = "0x2222222222222222222222222222222222222222";
