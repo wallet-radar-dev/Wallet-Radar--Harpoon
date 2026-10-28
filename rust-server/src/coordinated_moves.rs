@@ -127,8 +127,8 @@ mod tests {
 
     #[test]
     fn coordinated_moves_match_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/moves-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/moves-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("moves-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("moves-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = detect_coordinated_moves_core(c["nets"].as_array().unwrap());
             assert_eq!(got, golden[i], "case {i}");

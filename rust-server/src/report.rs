@@ -249,8 +249,8 @@ mod tests {
 
     #[test]
     fn build_report_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/report-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/report-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("report-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("report-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = build_report(
                 c["address"].as_str().unwrap(),

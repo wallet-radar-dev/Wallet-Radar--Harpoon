@@ -149,8 +149,8 @@ mod tests {
 
     #[test]
     fn token_groups_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/tokengroups-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/tokengroups-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("tokengroups-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("tokengroups-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = token_groups(c["contract"].as_str().unwrap(), c["symbol"].as_str().unwrap(), c["big"].as_array().unwrap(), &c["cps"]);
             assert_eq!(got, golden[i], "case {i}");

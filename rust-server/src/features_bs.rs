@@ -125,8 +125,8 @@ mod tests {
 
     #[test]
     fn features_bs_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/featbs-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/featbs-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("featbs-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("featbs-golden.json")).unwrap();
 
         for (i, case) in inputs.as_array().unwrap().iter().enumerate() {
             let address = case["address"].as_str().unwrap();

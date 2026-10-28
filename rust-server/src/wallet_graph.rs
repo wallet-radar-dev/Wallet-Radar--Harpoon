@@ -154,8 +154,8 @@ mod tests {
 
     #[test]
     fn wallet_graph_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/wgraph-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/wgraph-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("wgraph-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("wgraph-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let empty = vec![];
             let cp = c["cp"].as_array().unwrap_or(&empty);

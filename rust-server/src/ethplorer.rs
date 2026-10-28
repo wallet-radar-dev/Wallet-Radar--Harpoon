@@ -115,8 +115,8 @@ mod tests {
 
     #[test]
     fn holder_assets_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/holderassets-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/holderassets-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("holderassets-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("holderassets-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(holder_assets_build(c["address"].as_str().unwrap(), &c["d"]), golden[i], "case {i}");
         }

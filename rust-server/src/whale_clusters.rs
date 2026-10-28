@@ -419,8 +419,8 @@ mod tests {
         // Labels empty: fixture addresses are none of them infra, so the labels
         // DB is irrelevant here; an empty one keeps the test hermetic.
         let labels = Labels::load(Path::new("/nonexistent"));
-        let input: Value = serde_json::from_str(include_str!("../tests/fixtures/wc-input.json")).unwrap();
-        let want: Value = serde_json::from_str(include_str!("../tests/fixtures/wc-golden.json")).unwrap();
+        let input: Value = serde_json::from_str(&fixture!("wc-input.json")).unwrap();
+        let want: Value = serde_json::from_str(&fixture!("wc-golden.json")).unwrap();
         let got = build_whale_clusters(&input, &labels);
         assert_eq!(got, want);
     }

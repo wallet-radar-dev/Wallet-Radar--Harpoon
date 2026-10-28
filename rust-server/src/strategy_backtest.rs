@@ -177,8 +177,8 @@ mod tests {
 
     #[test]
     fn asset_result_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/stratbt-asset-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/stratbt-asset-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("stratbt-asset-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("stratbt-asset-golden.json")).unwrap();
         let thr = [0.30, 0.40, 0.48, 0.55, 0.70];
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(asset_result(c["sym"].as_str().unwrap(), c["events"].as_array().unwrap(), &thr), golden[i], "case {i}");
@@ -187,8 +187,8 @@ mod tests {
 
     #[test]
     fn strategy_summary_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/stratbt-summary-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/stratbt-summary-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("stratbt-summary-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("stratbt-summary-golden.json")).unwrap();
         let thr = [0.30, 0.40, 0.48, 0.55, 0.70];
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(strategy_summary(c["perAsset"].as_array().unwrap(), &thr, c["universeTotal"].as_u64().unwrap() as usize), golden[i], "case {i}");

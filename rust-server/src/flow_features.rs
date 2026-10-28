@@ -142,8 +142,8 @@ mod tests {
 
     #[test]
     fn flow_features_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/flow-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/flow-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("flow-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("flow-golden.json")).unwrap();
 
         for (i, case) in inputs.as_array().unwrap().iter().enumerate() {
             let address = case["address"].as_str().unwrap();

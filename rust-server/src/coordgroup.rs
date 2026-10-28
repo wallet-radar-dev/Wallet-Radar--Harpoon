@@ -162,8 +162,8 @@ mod tests {
 
     #[test]
     fn funders_of_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/coordfunders-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/coordfunders-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("coordfunders-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("coordfunders-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(funders_of(c["addr"].as_str().unwrap(), c["results"].as_array().unwrap()), golden[i], "case {i}");
         }
@@ -171,8 +171,8 @@ mod tests {
 
     #[test]
     fn group_coordination_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/groupcoord-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/groupcoord-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("groupcoord-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("groupcoord-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let addrs: Vec<String> = c["addrs"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
             assert_eq!(group_coordination(&addrs, &c["info"], &c["px"]), golden[i], "case {i}");

@@ -121,8 +121,8 @@ mod tests {
 
     #[test]
     fn golden_fixture() {
-        let input: Value = serde_json::from_str(include_str!("../tests/fixtures/graph-input.json")).unwrap();
-        let want: Value = serde_json::from_str(include_str!("../tests/fixtures/graph-golden.json")).unwrap();
+        let input: Value = serde_json::from_str(&fixture!("graph-input.json")).unwrap();
+        let want: Value = serde_json::from_str(&fixture!("graph-golden.json")).unwrap();
         assert_eq!(cluster_graph(&input), want);
     }
 }

@@ -105,8 +105,8 @@ mod tests {
 
     #[test]
     fn transfers_rich_golden() {
-        let input: Value = serde_json::from_str(include_str!("../tests/fixtures/bs-input.json")).unwrap();
-        let want: Value = serde_json::from_str(include_str!("../tests/fixtures/bs-golden.json")).unwrap();
+        let input: Value = serde_json::from_str(&fixture!("bs-input.json")).unwrap();
+        let want: Value = serde_json::from_str(&fixture!("bs-golden.json")).unwrap();
         let got = Value::Array(parse_transfers_rich(&input));
         assert_eq!(got, want);
     }

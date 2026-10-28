@@ -73,8 +73,8 @@ mod tests {
 
     #[test]
     fn whale_positions_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/wpos-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/wpos-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("wpos-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("wpos-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let case = c.as_array().unwrap();
             let arrs: Vec<&[Value]> = case.iter().map(|a| a.as_array().map(|v| v.as_slice()).unwrap_or(&[])).collect();

@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn only_altcoins_in_risk_sleeves() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/portfolio-input.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("portfolio-input.json")).unwrap();
         const BANNED: &[&str] = &[
             "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "TRX", "TON", "DOT",
             "WETH", "WBTC", "STETH", "USDC", "USDT", "DAI",
@@ -1017,7 +1017,7 @@ mod tests {
 
     #[test]
     fn core_is_filled_and_not_duplicated_in_satellite() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/portfolio-input.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("portfolio-input.json")).unwrap();
         let c = &inputs.as_array().unwrap()[0];
         let out = build_portfolio(
             c["universe"].as_array().unwrap(),

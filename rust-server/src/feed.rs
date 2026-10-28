@@ -307,8 +307,8 @@ mod tests {
 
     #[test]
     fn to_event_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/toevent-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/toevent-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("toevent-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("toevent-golden.json")).unwrap();
         for (i, c) in inputs["token"].as_array().unwrap().iter().enumerate() {
             let got = to_event(&c["wallet"], c["chain"].as_str().unwrap(), &c["tr"]);
             assert_eq!(got, golden["token"][i], "token case {i}");
@@ -321,8 +321,8 @@ mod tests {
 
     #[test]
     fn moralis_webhook_events_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/moralis-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/moralis-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("moralis-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("moralis-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let empty = vec![];
             let wallets = c["wallets"].as_array().unwrap_or(&empty);
@@ -356,8 +356,8 @@ mod tests {
     /// Якщо колись хтось перезніме goldens зі зламаного виходу — впаде тут, а не в браузері користувача.
     #[test]
     fn goldens_have_no_null_entity() {
-        let toev: Value = serde_json::from_str(include_str!("../tests/fixtures/toevent-golden.json")).unwrap();
-        let mor: Value = serde_json::from_str(include_str!("../tests/fixtures/moralis-golden.json")).unwrap();
+        let toev: Value = serde_json::from_str(&fixture!("toevent-golden.json")).unwrap();
+        let mor: Value = serde_json::from_str(&fixture!("moralis-golden.json")).unwrap();
         let mut checked = 0;
         let mut check = |ev: &Value, whose: &str| {
             assert!(

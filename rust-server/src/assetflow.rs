@@ -263,8 +263,8 @@ mod tests {
 
     #[test]
     fn compute_asset_flow_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/assetflow-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/assetflow-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("assetflow-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("assetflow-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = compute_asset_flow(
                 c["contract"].as_str().unwrap(),

@@ -140,8 +140,8 @@ mod tests {
 
     #[test]
     fn group_stats_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/groupstats-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/groupstats-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("groupstats-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("groupstats-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(group_stats(c["per"].as_array().unwrap()), golden[i], "case {i}");
         }
@@ -149,8 +149,8 @@ mod tests {
 
     #[test]
     fn group_flow_member_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/groupflow-member-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/groupflow-member-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("groupflow-member-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("groupflow-member-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = group_flow_member(c["addr"].as_str().unwrap(), c["nat"].as_array().unwrap(), c["tok"].as_array().unwrap(), c["px"].as_f64().unwrap());
             assert_eq!(Value::Array(got), golden[i], "case {i}");
@@ -159,8 +159,8 @@ mod tests {
 
     #[test]
     fn group_flow_reduce_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/groupflow-reduce-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/groupflow-reduce-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("groupflow-reduce-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("groupflow-reduce-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(group_flow_reduce(c["per"].as_array().unwrap()), golden[i], "case {i}");
         }

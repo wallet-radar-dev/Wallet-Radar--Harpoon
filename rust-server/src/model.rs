@@ -179,8 +179,8 @@ mod tests {
         // spread of feature vectors + edge cases (all-zero, empty object, strings
         // and negatives). Rounded outputs must match V8 exactly.
         let model = Model::load(Path::new("../dataset")).expect("dataset/model.json");
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/model-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/model-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("model-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("model-golden.json")).unwrap();
 
         for (i, feat) in inputs.as_array().unwrap().iter().enumerate() {
             let got = model.classify(feat);

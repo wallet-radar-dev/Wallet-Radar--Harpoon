@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn to_precision_matches_node() {
         let golden: serde_json::Value =
-            serde_json::from_str(include_str!("../tests/fixtures/toprecision-golden.json")).unwrap();
+            serde_json::from_str(&fixture!("toprecision-golden.json")).unwrap();
         for c in golden.as_array().unwrap() {
             let x = c["x"].as_f64().unwrap();
             let expect = c["p4"].as_f64().unwrap();

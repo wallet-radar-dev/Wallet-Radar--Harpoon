@@ -181,8 +181,8 @@ mod tests {
     #[test]
     fn conductor_candidates_match_node() {
         let labels = Labels::load(Path::new("../dataset"));
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/cfinder-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/cfinder-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("cfinder-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("cfinder-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = build_conductor_candidates(c.as_array().unwrap(), &labels);
             assert_eq!(Value::Array(got.list), golden[i]["candidates"], "case {i} candidates");

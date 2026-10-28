@@ -596,8 +596,8 @@ mod tests {
 
     #[test]
     fn conductor_network_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-network-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-network-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("cond-network-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("cond-network-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = conductor_network(c["address"].as_str().unwrap(), c["per"].as_array().unwrap(), c["px"].as_f64().unwrap());
             assert_eq!(got, golden[i], "network case {i}");
@@ -606,8 +606,8 @@ mod tests {
 
     #[test]
     fn coordination_score_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-score-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-score-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("cond-score-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("cond-score-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = coordination_score(c["address"].as_str().unwrap(), &c["net"]);
             assert_eq!(got, golden[i], "score case {i}");
@@ -616,8 +616,8 @@ mod tests {
 
     #[test]
     fn money_trace_node_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/moneytrace-node-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/moneytrace-node-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("moneytrace-node-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("moneytrace-node-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let visited: std::collections::HashSet<String> =
                 c["visited"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
@@ -635,8 +635,8 @@ mod tests {
 
     #[test]
     fn money_trace_assemble_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/moneytrace-assemble-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/moneytrace-assemble-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("moneytrace-assemble-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("moneytrace-assemble-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let visited: Vec<String> = c["visited"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
             let node_depth: std::collections::HashMap<String, i64> =
@@ -659,8 +659,8 @@ mod tests {
 
     #[test]
     fn wallet_cex_netflow_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-netflow-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/cond-netflow-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("cond-netflow-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("cond-netflow-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = wallet_cex_netflow(
                 c["address"].as_str().unwrap(),

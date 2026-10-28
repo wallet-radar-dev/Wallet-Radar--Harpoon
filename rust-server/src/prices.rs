@@ -784,8 +784,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn price_transfers_historical_matches_node() {
-        let input: Value = serde_json::from_str(include_str!("../tests/fixtures/pricing-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/pricing-golden.json")).unwrap();
+        let input: Value = serde_json::from_str(&fixture!("pricing-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("pricing-golden.json")).unwrap();
         let mut by_chain: Map<String, Value> = input["byChain"].as_object().unwrap().clone();
         let eth_native: HashSet<&str> = ["eth", "base", "arbitrum", "optimism"].into_iter().collect();
         price_transfers_historical(&mut by_chain, &eth_native).await;

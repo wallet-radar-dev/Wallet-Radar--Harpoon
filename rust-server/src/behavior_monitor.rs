@@ -56,8 +56,8 @@ mod tests {
 
     #[test]
     fn diff_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/bdiff-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/bdiff-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("bdiff-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("bdiff-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = diff(&c["base"], &c["snap"]);
             assert_eq!(Value::Array(got), golden[i], "case {i}");
