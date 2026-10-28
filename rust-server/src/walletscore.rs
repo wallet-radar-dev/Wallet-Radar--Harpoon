@@ -193,8 +193,8 @@ mod tests {
 
     #[test]
     fn wallet_score_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/wscore-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/wscore-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("wscore-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("wscore-golden.json")).unwrap();
 
         for (i, case) in inputs.as_array().unwrap().iter().enumerate() {
             let address = case["address"].as_str().unwrap();

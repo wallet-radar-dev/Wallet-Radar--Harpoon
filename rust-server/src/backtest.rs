@@ -244,6 +244,7 @@ mod tests {
 
     #[test]
     fn an_entry_is_the_first_crossing_of_the_whale_threshold_and_fires_once() {
+        store_or_skip!();
         let s = series(1.0);
         let transfers = json!([
             tr("0xmint", WHALE, 10_000.0, day(1.0)),  // $10k — not yet a whale
@@ -260,6 +261,7 @@ mod tests {
     /// The filter that stops an exchange hot wallet from being the "whale".
     #[test]
     fn exchanges_the_zero_address_and_the_contract_itself_are_never_whales() {
+        store_or_skip!();
         let s = series(1.0);
         let transfers = json!([
             tr("0xmint", BINANCE, 999_999.0, day(1.0)),
@@ -275,6 +277,7 @@ mod tests {
     /// and, more importantly, a whale who EXITED is still in the sample (no survivorship).
     #[test]
     fn a_whale_who_exits_stays_in_the_sample() {
+        store_or_skip!();
         let s = series(1.0);
         let transfers = json!([
             tr("0xmint", WHALE, 30_000.0, day(1.0)), // entry

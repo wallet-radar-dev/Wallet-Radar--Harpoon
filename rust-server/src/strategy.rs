@@ -78,8 +78,8 @@ mod tests {
 
     #[test]
     fn asset_strategy_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/strategy-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/strategy-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("strategy-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("strategy-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = asset_strategy(&c["f"], c["rising"].as_bool().unwrap());
             assert_eq!(got, golden[i], "case {i}");

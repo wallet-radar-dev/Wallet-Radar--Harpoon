@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn peel_analysis_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/peel-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/peel-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("peel-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("peel-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = peel_analysis(c["edges"].as_array().unwrap());
             assert_eq!(got, golden[i], "case {i}");
@@ -201,8 +201,8 @@ mod tests {
 
     #[test]
     fn connection_path_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/connpath-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/connpath-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("connpath-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("connpath-golden.json")).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             // Deterministic neighbour provider straight from the case's adjacency map.

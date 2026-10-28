@@ -230,8 +230,8 @@ mod tests {
 
     #[test]
     fn portfolio_backtest_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/pbacktest-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/pbacktest-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("pbacktest-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("pbacktest-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = portfolio_backtest(&c["pf"], &c["contractOf"], &c["charts"], &c["whaleEvents"]);
             assert_eq!(got, golden[i], "case {i}");

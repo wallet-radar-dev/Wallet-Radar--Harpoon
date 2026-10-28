@@ -364,6 +364,7 @@ mod tests {
 
     #[test]
     fn the_crawler_never_follows_contracts_or_exchanges() {
+        store_or_skip!();
         let mut g = Graph::default();
         g.add_node(A, 1);
         let transfers = json!([[
@@ -383,6 +384,7 @@ mod tests {
     /// A node enters the frontier only on its SECOND sighting — one transaction is dust.
     #[test]
     fn a_node_needs_two_edges_before_it_is_worth_crawling() {
+        store_or_skip!();
         let mut g = Graph::default();
         g.add_node(A, 1);
         g.expand_from(A, json!([[tr(A, B, 100.0, false)]]).as_array().unwrap(), 1);
@@ -394,6 +396,7 @@ mod tests {
 
     #[test]
     fn edges_are_undirected_and_accumulate_volume() {
+        store_or_skip!();
         let mut g = Graph::default();
         g.add_node(A, 1);
         g.expand_from(A, json!([[tr(A, B, 100.0, false), tr(B, A, 50.0, false)]]).as_array().unwrap(), 1);

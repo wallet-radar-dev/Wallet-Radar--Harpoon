@@ -195,8 +195,8 @@ mod tests {
 
     #[test]
     fn concentration_build_matches_node() {
-        let input: Value = serde_json::from_str(include_str!("../tests/fixtures/conc-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/conc-golden.json")).unwrap();
+        let input: Value = serde_json::from_str(&fixture!("conc-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("conc-golden.json")).unwrap();
         for (i, c) in input.as_array().unwrap().iter().enumerate() {
             let got = build(
                 c["contract"].as_str().unwrap(),

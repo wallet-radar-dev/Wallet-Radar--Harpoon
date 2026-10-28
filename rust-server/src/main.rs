@@ -1,3 +1,33 @@
+/// Golden-фікстура з `tests/fixtures/`. Файли згенеровані Node-оракулом (`tools/gen_*_fixtures.mjs`)
+/// і в публічний репозиторій не входять. Раніше `include_str!` ламав компіляцію всього тестового
+/// бінарника; тепер тест без фікстури чесно пропускається з повідомленням у виводі.
+/// Порожній `tests/fixtures/` у CI = пропущені golden-тести, а не червоний білд.
+#[cfg(test)]
+macro_rules! fixture {
+    ($name:literal) => {{
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/", $name);
+        match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("SKIP: golden-фікстура {path} недоступна ({e})");
+                return;
+            }
+        }
+    }};
+}
+
+/// Тест, якому потрібні довідники `wr-store` (`wallet-radar.db`). Seed-дані лежать поза
+/// репозиторієм (`WR_SEED`), тож без бази тест пропускається, а не падає на `snapshot()`.
+#[cfg(test)]
+macro_rules! store_or_skip {
+    () => {
+        if let Err(e) = wr_store::try_snapshot() {
+            eprintln!("SKIP: довідники wr-store недоступні ({e})");
+            return;
+        }
+    };
+}
+
 // Compute modules are complete and golden-tested but not yet wired into request
 // paths (workers and network routes come in later slices) — allow dead_code
 // until then rather than blanket-suppressing it crate-wide.

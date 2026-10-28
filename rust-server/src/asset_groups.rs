@@ -132,8 +132,8 @@ mod tests {
 
     #[test]
     fn funders_of_eth_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/funders-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/funders-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("funders-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("funders-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(funders_of_eth(c["addr"].as_str().unwrap(), c["nat"].as_array().unwrap()), golden[i], "case {i}");
         }
@@ -141,8 +141,8 @@ mod tests {
 
     #[test]
     fn detect_groups_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/detectgroups-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/detectgroups-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("detectgroups-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("detectgroups-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(detect_groups(c["holders"].as_array().unwrap(), &c["hf"], c["px"].as_f64().unwrap()), golden[i], "case {i}");
         }

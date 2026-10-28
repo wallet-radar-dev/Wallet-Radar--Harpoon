@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn analyze_group_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/activegroups-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/activegroups-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("activegroups-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("activegroups-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let empty = vec![];
             let acts = c["activities"].as_array().unwrap_or(&empty);

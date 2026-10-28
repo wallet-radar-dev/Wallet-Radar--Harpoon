@@ -128,8 +128,8 @@ mod tests {
 
     #[test]
     fn aggregate_balances_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/balances-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/balances-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("balances-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("balances-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let px: HashMap<String, f64> =
                 c["px"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_f64().unwrap())).collect();

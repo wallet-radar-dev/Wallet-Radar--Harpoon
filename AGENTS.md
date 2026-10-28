@@ -8,8 +8,11 @@ Read it before changing code. More focused Rust rules live in `.cursor/rules/`.
 - Production is Rust: `rust-server/` is the HTTP/WS backend; `backfill/`,
   `nextaction/`, `features/`, `patterns/`, and `gat/` are analytics/offline crates;
   `satellite/` is the key-holding gRPC proxy; `wr-store/` owns SQLite reference data.
-- `server/` is legacy Node kept as a behavioral oracle for `parity_check`. Do not
-  delete it or make it the production source of truth.
+- `server/` is legacy Node kept as a behavioral oracle for `parity_check`. It is NOT in the
+  public repository, so `parity_check`, `npm start`, and the `tools/gen_*_fixtures.mjs`
+  generators only work where that folder exists. Golden tests that need
+  `rust-server/tests/fixtures/` skip (print `SKIP:`) when the fixtures are absent. Never
+  make it the production source of truth.
 - The core must not receive provider API keys. Keyed provider calls go through
   `satellite/` over mTLS, and providers must remain allowlisted to prevent SSRF.
 - Wallets, exchange addresses, thresholds, groups, and strategy parameters belong

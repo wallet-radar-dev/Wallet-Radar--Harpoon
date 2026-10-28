@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn ml_status_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/mlstatus-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/mlstatus-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("mlstatus-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("mlstatus-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             assert_eq!(ml_status_build(&c["model"], c["samples"].as_i64().unwrap()), golden[i], "case {i}");
         }
@@ -193,8 +193,8 @@ mod tests {
         // exactly; the raw feature vector is checked within a tight tolerance
         // because `Math.log1p` and Rust's `ln_1p` can differ by ~1 ULP (a genuine
         // libm portability limit that the 1-decimal rounding absorbs).
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/smpredict-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/smpredict-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("smpredict-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("smpredict-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let tokens = c["tokens"].as_array().unwrap();
             let x = sm_features(&c["flow"], tokens);

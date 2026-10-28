@@ -128,8 +128,8 @@ mod tests {
 
     #[test]
     fn exchange_netflow_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/exnetflow-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/exnetflow-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("exnetflow-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("exnetflow-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let transfers: Vec<Transfer> = serde_json::from_value(c["transfers"].clone()).unwrap();
             let got = exchange_netflow(c["contract"].as_str().unwrap(), c["px"].as_f64().unwrap(), &transfers);

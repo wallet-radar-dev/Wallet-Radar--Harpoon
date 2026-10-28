@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn coordinated_networks_matches_node() {
-        let inputs: Value = serde_json::from_str(include_str!("../tests/fixtures/conet-input.json")).unwrap();
-        let golden: Value = serde_json::from_str(include_str!("../tests/fixtures/conet-golden.json")).unwrap();
+        let inputs: Value = serde_json::from_str(&fixture!("conet-input.json")).unwrap();
+        let golden: Value = serde_json::from_str(&fixture!("conet-golden.json")).unwrap();
         for (i, c) in inputs.as_array().unwrap().iter().enumerate() {
             let got = coordinated_networks_core(c["pos"].as_array().unwrap(), c["conductors"].as_array().unwrap());
             assert_eq!(got, golden[i], "case {i}");
