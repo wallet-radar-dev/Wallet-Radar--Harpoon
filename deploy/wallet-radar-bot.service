@@ -1,6 +1,6 @@
 [Unit]
-Description=Wallet Radar — Telegram-бот команд (botd)
-Documentation=file:///opt/wallet-tracker/backfill/src/botd.rs
+Description=Wallet Radar — Telegram-бот (багатокористувацький, реєстр у спільному місці на сервері)
+Documentation=file:///opt/wallet-tracker/bin/botd
 After=network-online.target wallet-radar-rust.service
 Wants=network-online.target
 
@@ -8,11 +8,19 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/opt/wallet-tracker
-ExecStart=/opt/wallet-tracker/backfill/target/release/botd /opt/wallet-tracker
-# Демон має пережити перезапуск роутера й тимчасову відмову Telegram:
+# APP_ROOT — корінь копії: звідси бот бере .env (токен, паролі, токен синхронізації),
+# dataset/alpha-feed.json (сигнали) і deploy/telegram-users.json (реєстр).
+Environment=APP_ROOT=/opt/wallet-tracker
+# Куди бот пише реєстр у спільне місце — на сервер Wallet Radar.
+Environment=API_HOST=127.0.0.1
+Environment=API_PORT=3000
+ExecStart=/opt/wallet-tracker/bin/botd /opt/wallet-tracker
+# Демон має пережити рестарт роутера й тимчасову відмову Telegram:
 # власний відступ усередині, systemd підстраховує на випадок падіння процесу.
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
