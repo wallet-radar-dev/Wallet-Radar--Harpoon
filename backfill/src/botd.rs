@@ -65,6 +65,10 @@ struct Cfg {
     admins: Vec<String>,
     /// Необов'язковий код підключення: без нього /start не працює.
     access_code: String,
+    /// Токен синхронізації реєстру: ним бот пише реєстр у сервер.
+    sync_token: String,
+    /// Адреса сервера (API). На Windows-машині це ноутбук у локальній мережі.
+    api_host: String,
     admin_pass: String,
     /// Пароль ролі «глядач» у веб-API. Саме ним бот ходить у /api/ask від імені
     /// підключеного, хто не є власником: viewer не може випадково отримати admin.
@@ -104,6 +108,8 @@ fn cfg() -> &'static Cfg {
             token: get("TELEGRAM_BOT_TOKEN"),
             admins,
             access_code: get("TELEGRAM_ACCESS_CODE"),
+            sync_token: get("TELEGRAM_SYNC_TOKEN"),
+            api_host: std::env::var("API_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
             admin_pass: get("ADMIN_PASSWORD"),
             viewer_pass: get("APP_PASSWORD"),
             port: std::env::var("API_PORT").unwrap_or_else(|_| "3000".into()),
@@ -360,6 +366,56 @@ fn save_signal_cursor(ts: u64) {
     let _ = std::fs::write(path, format!("{{\"ts\":{ts}}}"));
 }
 
+/// Спільне місце — реєстр на сервері.
+///
+/// Бот пише його сам, сервер читає звідти й розсилає свої алерти тим самим
+/// людям, що й команди бота. Токен синхронізації — окремий від пароля адміна:
+/// у бота й сервера різні паролі, і ділитися адмінським з ботом не треба.
+async fn push_registry(users: &Value) -> bool {
+    let c = cfg();
+    if c.sync_token.is_empty() {
+        return false;
+    }
+    let url = format!("http://{}:{}/api/telegram-users", c.api_host, c.port);
+    let Ok(body) = serde_json::to_string(users) else { return false };
+    match http()
+        .post(&url)
+        .header("x-telegram-sync-token", &c.sync_token)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => true,
+        Ok(r) => {
+            eprintln!("[botd] сервер не прийняв реєстр: HTTP {}", r.status().as_u16());
+            false
+        }
+        Err(e) => {
+            eprintln!("[botd] реєстр не долетів до сервера: {e}");
+            false
+        }
+    }
+}
+
+/// Цикл синхронізації реєстру — ОКРЕМИМ від опитування Telegram.
+///
+/// Якщо зробити push усередині опитування, то зникнення Telegram (або помилка
+/// опитування) зупиняло б і синхронізацію — а реєстр має бути актуальним
+/// саме тоді, коли бот мовчить. Крім того, «остання активність» підтягується
+/// сюди раз на хвилину, тож список підключених не застаріває.
+async fn registry_sync_loop() {
+    loop {
+        let users = load_users();
+        if !users_list(&users).is_empty() {
+            if push_registry(&users).await {
+                eprintln!("[botd] реєстр синхронізовано із сервером");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
 /// Сигнали, які ще не розіслано.
 fn pending_signals() -> Vec<Value> {
     let r = &cfg().root;
@@ -510,18 +566,18 @@ async fn handle(text: &str, caller: &Caller) -> String {
         "/рассылка" | "/розсилка" | "/broadcast" => {
             if is_admin { broadcast_cmd(&rest).await } else { denied("розсилка всім") }
         }
-        "/тиша" | "/mute" => mute_cmd(caller),
+        "/тиша" | "/mute" => mute_cmd(caller).await,
         "/користувачі" | "/users" => {
             if is_admin { users_cmd() } else { denied("список користувачів") }
         }
         "/відключити" | "/revoke" => {
-            if is_admin { revoke_cmd(&rest) } else { denied("відключення користувачів") }
+            if is_admin { revoke_cmd(&rest).await } else { denied("відключення користувачів") }
         }
         "/права" | "/promote" => {
-            if is_admin { role_cmd(&rest, true) } else { denied("зміна прав") }
+            if is_admin { role_cmd(&rest, true).await } else { denied("зміна прав") }
         }
         "/в правах" | "/demote" => {
-            if is_admin { role_cmd(&rest, false) } else { denied("зміна прав") }
+            if is_admin { role_cmd(&rest, false).await } else { denied("зміна прав") }
         }
         _ => ask(t, caller.role).await,
     }
@@ -605,7 +661,7 @@ async fn broadcast_cmd(text: &str) -> String {
 }
 
 /// Тиша — користувач лишається підключеним, але йому не приходить розсилка.
-fn mute_cmd(caller: &Caller) -> String {
+async fn mute_cmd(caller: &Caller) -> String {
     let mut users = load_users();
     let Some(rec) = users["users"].get(&caller.chat).cloned() else {
         return "ти не підключений — напиши /start.".to_string();
@@ -613,6 +669,7 @@ fn mute_cmd(caller: &Caller) -> String {
     let muted = !rec["muted"].as_bool().unwrap_or(false);
     users["users"][&caller.chat]["muted"] = json!(muted);
     if save_users(&users) {
+        let _ = push_registry(&users).await;
         if muted {
             "тиха увімкнена: сигнали й розсилки тобі не приходитимуть. /хтоя — перевірити.".to_string()
         } else {
@@ -648,7 +705,7 @@ fn users_cmd() -> String {
 }
 
 /// Від'єднати користувача.
-fn revoke_cmd(arg: &str) -> String {
+async fn revoke_cmd(arg: &str) -> String {
     let chat = arg.trim();
     if chat.is_empty() {
         return "кого відключити? /відключити <chat_id>".to_string();
@@ -656,6 +713,7 @@ fn revoke_cmd(arg: &str) -> String {
     let mut users = load_users();
     if remove_user(&mut users, chat) {
         if save_users(&users) {
+            let _ = push_registry(&users).await;
             format!("користувача {chat} відключено.")
         } else {
             "не зміг зберегти реєстр — спробуй ще раз.".to_string()
@@ -666,7 +724,7 @@ fn revoke_cmd(arg: &str) -> String {
 }
 
 /// Надати або забрати права адміна.
-fn role_cmd(arg: &str, admin: bool) -> String {
+async fn role_cmd(arg: &str, admin: bool) -> String {
     let chat = arg.trim();
     if chat.is_empty() {
         return "format: /права <chat_id> або /в правах <chat_id>".to_string();
@@ -687,6 +745,7 @@ fn role_cmd(arg: &str, admin: bool) -> String {
     let role = if admin { "admin" } else { "viewer" };
     users["users"][chat]["role"] = json!(role);
     if save_users(&users) {
+        let _ = push_registry(&users).await;
         format!("{chat} тепер {role}.")
     } else {
         "не зміг зберегти реєстр — спробуй ще раз.".to_string()
@@ -1368,6 +1427,8 @@ async fn handle_update(msg: &Value) -> Option<(String, String)> {
                 if save_users(&users) {
                     eprintln!("[botd] підключено @{username} ({}) · роль {}", chat, role.as_str());
                     log_cmd(&format!("ПІДКЛЮЧЕНО:{}[{}] @{}", chat, role.as_str(), username), text);
+                    // Одразу кажемо серверу: новий підключений має отримувати алерти.
+                    let _ = push_registry(&users).await;
                     Some((chat, greet(role)))
                 } else {
                     Some((chat, "не зміг зберегти реєстр — спробуй /start ще раз.".to_string()))
@@ -1431,6 +1492,10 @@ async fn main() {
             c.root
         );
     }
+
+    // Реєстр живе у спільному місці — на сервері. Синхронізація окремим циклом,
+    // щоб не залежала від того, чи вдалося опитування Telegram.
+    tokio::spawn(registry_sync_loop());
 
     let mut offset = load_offset();
     let mut fails = 0u32;

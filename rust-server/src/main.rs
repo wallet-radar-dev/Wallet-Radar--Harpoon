@@ -748,6 +748,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/graph-db-stats", get(graph_db_stats))
         .route("/api/forensics-status", get(forensics_status))
         .route("/api/telegram-status", get(telegram_status))
+        // Реєстр підключених Telegram: бот пише його сюди, сервер читає звідти.
+        // Це спільне місце — тому алерти сервера йдуть тим самим людям, що й
+        // команди бота.
+        .route("/api/telegram-users", post(telegram_users_upsert).get(telegram_users_get))
         .route("/api/debug-error", get(debug_error))
         .route("/api/wallets/{id}", delete(delete_wallet))
         .route("/api/events", get(events))
