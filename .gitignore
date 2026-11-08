@@ -1,6 +1,12 @@
 # Secrets. Never commit — this file holds live API keys and passwords.
 .env
 
+# Резервні копії .env — те саме, що ключі й паролі, тільки в іншому файлі.
+# Створюються перед ризикованими змінами, але в репозиторій потрапляти не мусять.
+.env.bak*
+.env.*.bak*
+*.env.bak*
+
 # Reinstallable from package-lock.json
 node_modules/
 
@@ -29,6 +35,8 @@ web/app.css
 # mTLS PKI — приватні ключі та видані сертифікати НЕ комітимо
 deploy/pki/out/
 deploy/.env
+# Секрети GlitchTip (SECRET_KEY + пароль БД) — НЕ комітимо
+deploy/.env.glitchtip
 
 # Соц-кеш LunarCrush (prices.rs). На диску він ЖИВЕ навмисно — квота 100 викликів/добу, і без
 # збереження кожен рестарт палив би 30 із них наново. Але в РЕПО йому робити нічого: файл
@@ -41,48 +49,31 @@ dataset/social-cache.json
 # (звідти відновлюємось), у репо — ні. Історія датасету і так у комітах dataset/*.json.
 dataset/.backups/
 .claude/hooks/compress-large-images/target/
-backfill/.backfill.env
+backfill/target/
+wr-store/target/
+wr-dict/target/
 
-# Архів прибраних dev-артефактів (cleanup 2026-07-26). Відновлення: mv old/<шлях> <шлях>
-old/
-
-# Тимчасові файли атомарного запису (atomicw). Осиротіти можуть лише при краху.
-*.tmp.*
-
-# Секрети: ловимо БУДЬ-ЯКИЙ *.env, а не перелічені три. Перелік уже раз підвів —
-# deploy/backfill.env і deploy/core.env лишались поза ним із живими ключами.
-*.env
-!*.env.example
-# Файл сховища: значень секретів у ньому немає (вони в Credential Manager),
-# але дані досліджень туди не комітимо.
-wallet-radar.db
-wallet-radar.db-wal
-wallet-radar.db-shm
-
-# Проміжні файли переїзду в БД. Містять ТІ САМІ адреси, що ми виносимо з коду —
-# закомітити їх означало б перенести витік із .rs у .json. Відтворюються
-# командою `wr-import extract`, поки код ще тримає ці таблиці; далі джерело — БД.
-wr-store/seed/
-
-# Правило `*.env` НЕ ловить копії виду `.env.20260716-192604` — файл закінчується
-# не на .env. Саме так у теці deploy/backups/ лежав живий TELEGRAM_BOT_TOKEN
-# і обидва паролі, поза git, але й поза будь-яким правилом.
-.env.*
-!.env.example
-deploy/backups/
-
-# Ретро-реплей сигналів: десятки тисяч рядків, які щоразу відтворюються біном sigretro
-# з історії біржі. У git тримаємо ЖИВИЙ журнал (dataset/signals.jsonl) — він неповторний.
-dataset/retro/
-
-# Артефакти збірки БУДЬ-ЯКОГО крейта. Перелік по одному (rust-server/, satellite/, gat/)
-# уже підвів: wr-store/target і patterns/target у ньому не значились, і при першій же
-# спробі закомітити крейт в індекс полізли тисячі файлів .fingerprint.
-target/
-seed/
-
-# Стан Telegram-бота: реєстр підключених і курсор авторозсилки. Це runtime-стан,
-# а не код — у git йому не місце (інакше реєстр з чатами потрапить у репозиторій).
+# Оперативний стан Telegram-бота: реєстр підключених (chat_id, імена — персональні
+# дані), зсув і курсори доставки. У репозиторій їм не місце.
 deploy/telegram-users.json
-deploy/telegram-users.json.tmp.*
+dataset/telegram-users.json
+deploy/telegram-offset.txt
 deploy/telegram-signal-cursor.json
+deploy/telegram-signal-cursors.json
+
+# Журнал команд бота
+deploy/bot-commands.log
+
+# Стан моніторів (cexsignal, wakeup) — перезаписується під час роботи
+deploy/*.state.json
+
+# GlitchTip: у compose-файлі пароль БД і SECRET_KEY — НЕ комітимо
+deploy/docker-compose.glitchtip.yml
+
+# Тимчасові знімки прогресу воркерів — лише шум у дифах
+dataset/.cg-universe*.json
+dataset/.quota-report-*.txt
+dataset/.whale-hunt-mc-progress.json
+
+# Стан campwatch — перезаписується на кожному прогоні
+dataset/backfill/campwatch-state.json
