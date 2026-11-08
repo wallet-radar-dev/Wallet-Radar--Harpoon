@@ -11,10 +11,24 @@
 //! сервера.
 //!
 //! ─────────────────────────── ДОСТУП ───────────────────────────
-//! Бот виконує команди на ВМ, зокрема довільні shell-команди. Це віддалене виконання
-//! коду, тож впускаємо рівно одного: `TELEGRAM_USERNAME` з `.env`. Повідомлення від
-//! будь-кого іншого відкидається Й ЗАПИСУЄТЬСЯ — мовчки ігнорувати спробу гірше, ніж
-//! знати про неї. Порожній `TELEGRAM_USERNAME` = команди вимкнено повністю.
+//! Бот багатокористувацький: підключитися може кожен, хто наді��лає `/start`, і дані
+//! проєкту (гаманці, токени, групи, монітори) бачать усі підключені.
+//!
+//! Але «доступ до даних» і «доступ до машини» — різні речі. Бот виконує команди на ВМ,
+//! зокрема довільний shell: це віддалене виконання коду, і воно лишається за власником.
+//! Тому ролі дві:
+//! - `admin`  — власник (`TELEGRAM_USERNAME`, плюс `TELEGRAM_ADMINS` через кому):
+//!   довільний shell, запуск бінів, зміна порогів, журнал команд, керування користувачами;
+//! - `viewer` — усі інші підключені: лише читання даних і асистент.
+//!
+//! Реєстр підключених — `deploy/telegram-users.json`, тож підключення переживає
+//! перезапуск демона. Незнайомому чату бот відповідає «напиши /start» і нічого не
+//! виконує; спроба без реєстрації пишеться в журнал — мовчки ігнорувати спробу гірше,
+//! ніж знати про неї.
+//!
+//! Якщо заданий `TELEGRAM_ACCESS_CODE`, підключення вимагає коду (`/start <код>`) —
+//! тоді бот не є відкритим для всіх, хто його знайде. Якщо код не заданий — підключитися
+//! може кожен, хто надішле `/start`.
 //!
 //! Довільний shell вимагає префікса `!`. Не заради безпеки (доступ той самий), а щоб
 //! випадкове речення не пішло в `sh -c`. Усе виконане лягає в `deploy/bot-commands.log`.
@@ -30,7 +44,7 @@
 
 use serde_json::{json, Value};
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// Скільки секунд тримати довге опитування. Telegram віддає відповідь одразу, щойно
 /// приходить повідомлення, тож це не затримка, а економія запитів.
@@ -46,8 +60,15 @@ const RUNNABLE: [&str; 6] = ["cexsignal", "campwatch", "wakeup", "tokprices", "t
 struct Cfg {
     root: String,
     token: String,
-    user: String,
+    /// Список адмінів (власник + додаткові). Порожній = немає жодного адміна, тоді
+    /// привілейовані команди недоступні взагалі, а бот працює лише на читання.
+    admins: Vec<String>,
+    /// Необов'язковий код підключення: без нього /start не працює.
+    access_code: String,
     admin_pass: String,
+    /// Пароль ролі «глядач» у веб-API. Саме ним бот ходить у /api/ask від імені
+    /// підключеного, хто не є власником: viewer не може випадково отримати admin.
+    viewer_pass: String,
     port: String,
     model: String,
 }
@@ -55,7 +76,11 @@ struct Cfg {
 fn cfg() -> &'static Cfg {
     static C: OnceLock<Cfg> = OnceLock::new();
     C.get_or_init(|| {
-        let root = std::env::args().nth(1).unwrap_or_else(|| "/opt/wallet-tracker".into());
+        // Корінь: спершу APP_ROOT (як у systemd-юніті), потім аргумент. Так одна й та сама
+        // копія коду працює і під systemd, і вручну, і в юніт-тестах.
+        let root = std::env::var("APP_ROOT").ok().filter(|s| !s.is_empty())
+            .or_else(|| std::env::args().nth(1))
+            .unwrap_or_else(|| "/opt/wallet-tracker".into());
         let env = std::fs::read_to_string(format!("{root}/.env")).unwrap_or_default();
         let get = |k: &str| -> String {
             env.lines()
@@ -65,10 +90,22 @@ fn cfg() -> &'static Cfg {
                 .trim()
                 .to_string()
         };
+        // Адміни — список: TELEGRAM_USERNAME (власник) + TELEGRAM_ADMINS (через кому).
+        let mut admins: Vec<String> = get("TELEGRAM_USERNAME")
+            .split(',')
+            .map(|s| s.trim().trim_start_matches('@').to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        for a in get("TELEGRAM_ADMINS").split(',') {
+            let a = a.trim().trim_start_matches('@').to_lowercase();
+            if !a.is_empty() && !admins.contains(&a) { admins.push(a); }
+        }
         Cfg {
             token: get("TELEGRAM_BOT_TOKEN"),
-            user: get("TELEGRAM_USERNAME").trim_start_matches('@').to_lowercase(),
+            admins,
+            access_code: get("TELEGRAM_ACCESS_CODE"),
             admin_pass: get("ADMIN_PASSWORD"),
+            viewer_pass: get("APP_PASSWORD"),
             port: std::env::var("API_PORT").unwrap_or_else(|_| "3000".into()),
             model: std::env::var("BOT_MODEL").unwrap_or_else(|_| "qwen2.5:14b".into()),
             root,
@@ -141,14 +178,178 @@ fn log_cmd(who: &str, text: &str) {
     }
 }
 
+// ─────────────────────────── ролі й реєстр ───────────────────────────
+
+/// Роль підключеного користувача.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Role {
+    Admin,
+    Viewer,
+}
+
+impl Role {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Viewer => "viewer",
+        }
+    }
+}
+
+/// Хто саме пише в чат — щоб відповідь і журнал знали, чиї це дії.
+struct Caller {
+    chat: String,
+    username: String,
+    name: String,
+    role: Role,
+}
+
+/// Реєстр підключених — `deploy/telegram-users.json`.
+fn users_path() -> String {
+    users_path_in(&cfg().root)
+}
+
+fn users_path_in(root: &str) -> String {
+    format!("{root}/deploy/telegram-users.json")
+}
+
+/// Читаємо реєстр. Файл може бути відсутній (ще ніхто не підключався) або покоситись —
+/// тоді реєстр починається з порожнього, а не з паники.
+fn load_users() -> Value {
+    load_users_from(&users_path())
+}
+
+fn load_users_from(path: &str) -> Value {
+    let mut v = read_json(path).unwrap_or_else(|| json!({}));
+    if !v["users"].is_object() {
+        v["users"] = json!({});
+    }
+    v
+}
+
+/// Атомарний запис: спершу .tmp, потім перейменування. Якщо демон упаде посеред
+/// запису, реєстр лишиться цілим — а втрата реєстра = втрата доступу для всіх.
+fn save_users(v: &Value) -> bool {
+    save_users_to(&users_path(), v)
+}
+
+fn save_users_to(path: &str, v: &Value) -> bool {
+    let tmp = format!("{path}.tmp");
+    match serde_json::to_string_pretty(v) {
+        Ok(body) => {
+            if std::fs::write(&tmp, body).is_err() {
+                return false;
+            }
+            std::fs::rename(&tmp, path).is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Чи цей username — власник (адмін). Ім'я сильніше за реєстр: власник завжди адмін,
+/// навіть якщо його записали в реєстр як глядача.
+fn is_admin_name(username: &str) -> bool {
+    is_admin_in(username, &cfg().admins)
+}
+
+fn is_admin_in(username: &str, admins: &[String]) -> bool {
+    let u = username.trim().trim_start_matches('@').to_lowercase();
+    !u.is_empty() && admins.iter().any(|a| *a == u)
+}
+
+/// Роль чату: спершу ім'я (адмін — завжди), потім реєстр. `None` = не підключений.
+fn role_of(users: &Value, chat: &str, username: &str) -> Option<Role> {
+    role_of_in(users, chat, username, &cfg().admins)
+}
+
+fn role_of_in(users: &Value, chat: &str, username: &str, admins: &[String]) -> Option<Role> {
+    if is_admin_in(username, admins) {
+        return Some(Role::Admin);
+    }
+    match users["users"].get(chat).and_then(|u| u["role"].as_str()) {
+        Some("admin") => Some(Role::Admin),
+        Some("viewer") => Some(Role::Viewer),
+        _ => None,
+    }
+}
+
+/// Додає або оновлює запис підключеного.
+fn upsert_user(users: &mut Value, chat: &str, username: &str, name: &str, role: Role) {
+    let mut u = users["users"].get(chat).cloned().unwrap_or_else(|| json!({}));
+    u["chat"] = json!(chat);
+    u["username"] = json!(username);
+    u["name"] = json!(name);
+    u["role"] = json!(role.as_str());
+    u["joined"] = json!(u["joined"].as_u64().unwrap_or(now_secs()));
+    u["last"] = json!(now_secs());
+    users["users"][chat] = u;
+}
+
+fn remove_user(users: &mut Value, chat: &str) -> bool {
+    match users["users"].as_object_mut() {
+        Some(map) => map.remove(chat).is_some(),
+        None => false,
+    }
+}
+
+/// Список підключених — для адмінської `/users`.
+fn users_list(users: &Value) -> Vec<Value> {
+    users["users"]
+        .as_object()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Скільки команд на хвилину дозволено одному чату.
+///
+/// Усі чати блять в один веб-API з одного IP, а сервер лімітує глядачів ПО IP — тож
+/// без власного ліміту один гаманець вичерпає квоту для всіх підключених.
+fn rate_ok(chat: &str, role: Role) -> bool {
+    use std::collections::HashMap;
+    static M: OnceLock<Mutex<HashMap<String, (u64, u32)>>> = OnceLock::new();
+    let m = M.get_or_init(|| Mutex::new(HashMap::new()));
+    let max = match role {
+        Role::Admin => 60,
+        Role::Viewer => 15,
+    };
+    let now = now_secs();
+    let mut g = m.lock().unwrap();
+    let e = g.entry(chat.to_string()).or_insert((now, 0));
+    if now.saturating_sub(e.0) >= 60 {
+        e.0 = now;
+        e.1 = 0;
+    }
+    if e.1 >= max {
+        return false;
+    }
+    e.1 += 1;
+    true
+}
+
 // ─────────────────────────── маршрутизація ───────────────────────────
 
-async fn handle(text: &str) -> String {
-    let t = text.trim();
-    if t.is_empty() { return "порожнє повідомлення".to_string(); }
+/// Відмова за роллю. Каже ЩО саме закрите — інакше користувач думає, що бот зламаний.
+fn denied(what: &str) -> String {
+    format!("{what} — лише для власника бота.")
+}
 
-    // Довільна команда — свідомий префікс, не випадкове речення
+/// Розклад команд за ролями.
+///
+/// `admin` — власник: усе, включно з довільним shell на ВМ.
+/// `viewer` — підключений глядач: лише читання даних і асистент.
+async fn handle(text: &str, caller: &Caller) -> String {
+    let t = text.trim();
+    if t.is_empty() {
+        return "порожнє повідомлення".to_string();
+    }
+
+    // Довільна команда — свідомий префікс, не випадкове речення. Виконування коду на
+    // ВМ лишається за власником: для глядача це не «обмежена функція», а різниця між
+    // доступом до даних і доступом до машини.
     if let Some(cmd) = t.strip_prefix('!') {
+        if caller.role != Role::Admin {
+            return denied("довільні команди на ВМ");
+        }
         return run_shell(cmd.trim()).await;
     }
 
@@ -156,40 +357,174 @@ async fn handle(text: &str) -> String {
         Some((h, r)) => (h.to_lowercase(), r.trim().to_string()),
         None => (t.to_lowercase(), String::new()),
     };
+    let is_admin = caller.role == Role::Admin;
 
     match head.as_str() {
-        "/start" | "/help" | "/довідка" | "/допомога" => help(),
+        "/start" => greet(caller.role),
+        "/help" | "/довідка" | "/допомога" => help(caller.role),
         "/стан" | "/status" => status(),
         "/гаманець" | "/wallet" => wallet(&rest),
         "/токен" | "/token" => token_info(&rest),
         "/група" | "/group" => group(&rest),
-        "/запусти" | "/run" => run_bin(&rest).await,
-        "/поріг" | "/env" => env_cmd(&rest),
-        "/лог" | "/log" => tail_log(&rest),
-        "/діагностика" | "/diag" => diag().await,
-        _ => ask(t).await,
+        "/сигнали" | "/signals" => signals(&rest),
+        "/запусти" | "/run" => {
+            if is_admin { run_bin(&rest).await } else { denied("запуск службових бінів") }
+        }
+        // читання порогів — усім, зміна — власнику
+        "/поріг" | "/env" => {
+            if rest.is_empty() { env_cmd("") }
+            else if is_admin { env_cmd(&rest) }
+            else { denied("зміна порогів") }
+        }
+        "/лог" | "/log" => {
+            if is_admin { tail_log(&rest) } else { denied("перегляд логів") }
+        }
+        "/діагностика" | "/diag" => diag(caller).await,
+        "/хтоя" | "/whoami" => whoami(caller),
+        "/користувачі" | "/users" => {
+            if is_admin { users_cmd() } else { denied("список користувачів") }
+        }
+        "/відключити" | "/revoke" => {
+            if is_admin { revoke_cmd(&rest) } else { denied("відключення користувачів") }
+        }
+        "/права" | "/promote" => {
+            if is_admin { role_cmd(&rest, true) } else { denied("зміна прав") }
+        }
+        "/в правах" | "/demote" => {
+            if is_admin { role_cmd(&rest, false) } else { denied("зміна прав") }
+        }
+        _ => ask(t, caller.role).await,
     }
 }
 
-fn help() -> String {
-    "<b>Wallet Radar — бот</b>\n\n\
+/// Привітання після підключення. Роль видно одразу — щоб не гадати, що тобі доступно.
+fn greet(role: Role) -> String {
+    let extra = match role {
+        Role::Admin => "\nТи — власник: доступні довільні команди, запуск бінів і керування користувачами.",
+        Role::Viewer => "\nТи підключений як глядач: дані проєкту, асистент і монітори.",
+    };
+    format!("<b>Wallet Radar — бот</b>\nПідключено.{extra}\n\n{}", help(role))
+}
+
+/// Довідка. Для глядача приховуємо привілейовані команди — щоб не було спокуси
+/// натискати те, що все одно відхилиться.
+fn help(role: Role) -> String {
+    let base = "<b>Wallet Radar — бот</b>\n\n\
      <b>Дані</b>\n\
      /гаманець 0x… — роль, баланс, мітка, активність\n\
      /токен ONDO — ціна, ліквідність, обіг, капіталізація\n\
      /група N — склад групи (без аргументу — список)\n\
+     /сигнали [N] — останні сигнали проєкту (за замовчуванням 5)\n\
      /стан — коли востаннє відпрацював кожен монітор\n\
-     /лог cexsignal — хвіст логу\n\
-     /діагностика — перевірка всіх ланок відповіді\n\n\
-     <b>Дії</b>\n\
+     /діагностика — перевірка всіх ланок відповіді\n\
+     /хтоя — мій чат, роль і ліміт\n\n\
+     <b>Питання</b>\n\
+     Напиши питання без слеша — піде в асистента, а якщо той\n\
+     не впізнає, відповість локальна модель (буде позначено).";
+    if role != Role::Admin {
+        return format!("{base}\n\nДані проєкту спільні для всіх підключених.");
+    }
+    format!("{base}\n\n\
+     <b>Дії (лише власник)</b>\n\
      /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
      /поріг — показати збережені параметри\n\
      /поріг cexsignal MIN_USD=500000 — змінити й запам'ятати\n\
+     /лог cexsignal — хвіст логу\n\
      !df -h — довільна команда на ВМ\n\n\
-     <b>Питання</b>\n\
-     Напиши питання без слеша — піде в асистента, а якщо той\n\
-     не впізнає, відповість локальна модель (буде позначено).\n\n\
-     Запускати можна: cexsignal, campwatch, wakeup, tokprices, tokliq, relay-monitor"
-        .to_string()
+     <b>Користувачі</b>\n\
+     /користувачі — хто підключений\n\
+     /права &lt;chat_id&gt; — зробити адміном\n\
+     /в правах &lt;chat_id&gt; — забрати адміна\n\
+     /відключити &lt;chat_id&gt; — від'єднати\n\n\
+     Запускати можна: cexsignal, campwatch, wakeup, tokprices, tokliq, relay-monitor")
+}
+
+/// Хто я: чат, роль, ліміт. Необхідно, коли бот уже під'єднаний до десятка людей —
+/// треба бачити, що саме тобі належить.
+fn whoami(c: &Caller) -> String {
+    let name_line = if c.name.is_empty() {
+        String::new()
+    } else {
+        format!("ім'я: {}\n", esc(&c.name))
+    };
+    format!(
+        "<b>Ти</b>\nchat_id: <code>{}</code>\n{}ім'я: @{}\nроль: <b>{}</b>\nліміт: {} команд/хв",
+        esc(&c.chat),
+        name_line,
+        esc(&c.username),
+        c.role.as_str(),
+        match c.role { Role::Admin => 60, Role::Viewer => 15 }
+    )
+}
+
+/// Список підключених — адмінська команда.
+fn users_cmd() -> String {
+    let users = load_users();
+    let list = users_list(&users);
+    if list.is_empty() {
+        return "підключених ще немає.".to_string();
+    }
+    let mut out = format!("<b>Підключені: {}</b>\n", list.len());
+    let mut sorted = list;
+    sorted.sort_by_key(|u| u["joined"].as_u64().unwrap_or(0));
+    for u in sorted {
+        let last = u["last"].as_u64().unwrap_or(0);
+        out.push_str(&format!(
+            "<code>{}</code> @{} — {} · {}{}\n",
+            esc(u["chat"].as_str().unwrap_or("?")),
+            esc(u["username"].as_str().unwrap_or("?")),
+            esc(u["role"].as_str().unwrap_or("?")),
+            esc(u["name"].as_str().unwrap_or("")),
+            if last > 0 { format!(" · {}", ago(last)) } else { String::new() }
+        ));
+    }
+    out
+}
+
+/// Від'єднати користувача.
+fn revoke_cmd(arg: &str) -> String {
+    let chat = arg.trim();
+    if chat.is_empty() {
+        return "кого відключити? /відключити <chat_id>".to_string();
+    }
+    let mut users = load_users();
+    if remove_user(&mut users, chat) {
+        if save_users(&users) {
+            format!("користувача {chat} відключено.")
+        } else {
+            "не зміг зберегти реєстр — спробуй ще раз.".to_string()
+        }
+    } else {
+        format!("користувача {chat} у реєстрі немає.")
+    }
+}
+
+/// Надати або забрати права адміна.
+fn role_cmd(arg: &str, admin: bool) -> String {
+    let chat = arg.trim();
+    if chat.is_empty() {
+        return "format: /права <chat_id> або /в правах <chat_id>".to_string();
+    }
+    let mut users = load_users();
+    let Some(rec) = users["users"].get(chat).cloned() else {
+        return format!("{chat} не підключений — спершу /start з його боку.")
+            .to_string();
+    };
+    // Власник визначений іменем у .env — прибрати його права командою не можна,
+    // бо ім'я сильніше за реєстр. Треба правити TELEGRAM_USERNAME/TELEGRAM_ADMINS.
+    if is_admin_name(rec["username"].as_str().unwrap_or("")) {
+        return format!(
+            "{chat} — власник (список TELEGRAM_USERNAME/TELEGRAM_ADMINS). \
+             Прибрати треба звідти, а не командою."
+        );
+    }
+    let role = if admin { "admin" } else { "viewer" };
+    users["users"][chat]["role"] = json!(role);
+    if save_users(&users) {
+        format!("{chat} тепер {role}.")
+    } else {
+        "не зміг зберегти реєстр — спробуй ще раз.".to_string()
+    }
 }
 
 /// Здоров'я моніторів. Головне питання не «чи є файл», а «коли він востаннє оновлювався»:
@@ -332,22 +667,65 @@ fn group(arg: &str) -> String {
 /// повідомлення, не піднявся асистент, не відповідає модель, немає моделі з підтримкою
 /// інструментів, зламана розмітка відповіді. Замість здогадів — перевірка кожної ланки
 /// окремо, прямо з телефона.
-async fn diag() -> String {
+/// Останні сигнали з alpha-файду — доступно кожному підключеному.
+///
+/// Це головне, заради чого бот існує: не довідка з документації, а живі сигнали
+/// проєкту, які всі бачать однаково.
+fn signals(arg: &str) -> String {
+    let n: usize = arg.trim().parse().unwrap_or(5).clamp(1, 20);
+    let r = &cfg().root;
+    let Some(feed) = read_json(&format!("{r}/dataset/alpha-feed.json")) else {
+        return "файлу сигналів немає: dataset/alpha-feed.json".to_string();
+    };
+    let empty = vec![];
+    let items: Vec<&Value> = feed.as_array().unwrap_or(&empty).iter().rev().take(n).collect();
+    if items.is_empty() {
+        return "сигналів поки немає.".to_string();
+    }
+    let mut out = format!("<b>Останні сигнали</b>\n");
+    for it in items {
+        let ts = it["ts"].as_u64().unwrap_or(0);
+        let addr = it["address"].as_str().unwrap_or("");
+        let toks = it["tokens"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "• <b>{}</b> · {} <code>{}</code>\n",
+            esc(&toks),
+            if ts > 0 { ago(ts / 1000) } else { "—".to_string() },
+            esc(&short(addr))
+        ));
+    }
+    out
+}
+
+async fn diag(caller: &Caller) -> String {
     let c = cfg();
     let mut out = String::from("<b>ДІАГНОСТИКА</b>\n");
     out.push_str(&format!("корінь: {}\n", esc(&c.root)));
-    out.push_str(&format!("власник: @{}\n", esc(&c.user)));
+    out.push_str(&format!(
+        "власники: {}\n",
+        if c.admins.is_empty() { "<b>немає — привілейовані команди вимкнено</b>".to_string() }
+        else { c.admins.iter().map(|a| format!("@{a}")).collect::<Vec<_>>().join(", ") }
+    ));
+    out.push_str(&format!(
+        "підключено: {} · твоя роль: {}\n",
+        users_list(&load_users()).len(),
+        caller.role.as_str()
+    ));
     out.push_str(&format!("модель: {}\n", esc(&c.model)));
     out.push_str(&format!("зсув Telegram: {}\n\n", load_offset()));
 
-    // асистент
+    // асистент — від твоєї ролі, бо саме так він викликається в роботі
     let url = format!("http://127.0.0.1:{}/api/ask?q=%D1%82%D0%B5%D1%81%D1%82", c.port);
-    let a = match http().get(&url).basic_auth("admin", Some(&c.admin_pass)).send().await {
+    let (login, pass) = api_creds(caller.role);
+    let a = match http().get(&url).basic_auth(login, Some(pass)).send().await {
         Ok(r) if r.status().is_success() => "✅ відповідає".to_string(),
         Ok(r) => format!("⚠️ HTTP {}", r.status().as_u16()),
         Err(e) => format!("❌ {}", e),
     };
-    out.push_str(&format!("асистент /api/ask: {}\n", esc(&a)));
+    out.push_str(&format!("асистент /api/ask ({login}): {}\n", esc(&a)));
 
     // модель
     let o = match http().get("http://127.0.0.1:11434/api/tags").send().await {
@@ -483,9 +861,22 @@ async fn run_shell(cmd: &str) -> String {
 
 // ─────────────────────────── питання ───────────────────────────
 
-async fn ask(q: &str) -> String {
+/// Якими кредами бот ходить у веб-API від імені цієї ролі.
+///
+/// Глядач НІКОЛИ не отримує пароль адміна: «багатокористувацький» не має означати
+/// «кожен підключений — адмін». Якщо `APP_PASSWORD` не заданий, у глядача асистента
+/// через API немає (він впаде на локальну модель, якій дані не видно).
+fn api_creds(role: Role) -> (&'static str, &'static str) {
+    let c = cfg();
+    match role {
+        Role::Admin => ("admin", c.admin_pass.as_str()),
+        Role::Viewer => ("viewer", c.viewer_pass.as_str()),
+    }
+}
+
+async fn ask(q: &str, role: Role) -> String {
     // 1. Детермінований асистент — відповідає з даних і не вигадує чисел.
-    if let Some(a) = ask_assistant(q).await { return a; }
+    if let Some(a) = ask_assistant(q, role).await { return a; }
     // 2. Модель З ДОСТУПОМ ДО ДАНИХ: сама вирішує, що подивитись, ми виконуємо.
     if let Some(a) = ask_ollama_tools(q).await { return a; }
     // 3. Модель без даних — останній засіб, і він чесно помічений.
@@ -671,10 +1062,14 @@ async fn ask_ollama_tools(q: &str) -> Option<String> {
     Some(format!("{}\n\n<i>дані з: {}</i>", esc(&content), esc(&used.join(", "))))
 }
 
-async fn ask_assistant(q: &str) -> Option<String> {
+async fn ask_assistant(q: &str, role: Role) -> Option<String> {
     let c = cfg();
+    let (login, pass) = api_creds(role);
+    if pass.is_empty() {
+        return None;
+    }
     let url = format!("http://127.0.0.1:{}/api/ask?q={}", c.port, urlencode(q));
-    let r = http().get(&url).basic_auth("admin", Some(&c.admin_pass)).send().await.ok()?;
+    let r = http().get(&url).basic_auth(login, Some(pass)).send().await.ok()?;
     if !r.status().is_success() { return None; }
     let v: Value = r.json().await.ok()?;
     let ans = v["answer"].as_str().unwrap_or("").trim().to_string();
@@ -763,6 +1158,65 @@ fn chunks(s: &str) -> Vec<String> {
     out
 }
 
+/// Обробка одного повідомлення Telegram: повертає чат і текст відповіді.
+///
+/// Винесено ОКРЕМО від надсилання — щоб увесь сценарій доступу (реєстрація, ролі,
+/// ліміти, відмови) можна було перевірити тестами без справжнього Telegram.
+async fn handle_update(msg: &Value) -> Option<(String, String)> {
+    let c = cfg();
+    let text = msg["text"].as_str()?;
+    let chat = msg["chat"]["id"].as_i64().unwrap_or(0).to_string();
+    let username = msg["from"]["username"].as_str().unwrap_or("").trim().to_lowercase();
+    let name = msg["from"]["first_name"].as_str().unwrap_or("").trim().to_string();
+
+    let mut users = load_users();
+    match role_of(&users, &chat, &username) {
+        // ── підключений ──
+        Some(role) => {
+            log_cmd(&format!("{}[{}] @{}", chat, role.as_str(), username), text);
+            if !rate_ok(&chat, role) {
+                return Some((chat, "забагато запитів — зачекай хвилину.".to_string()));
+            }
+            // Час останньої активності — щоб у /users було видно, хто ще користується.
+            upsert_user(&mut users, &chat, &username, &name, role);
+            let _ = save_users(&users);
+            let caller = Caller { chat: chat.clone(), username, name, role };
+            let reply = handle(text, &caller).await;
+            Some((chat, reply))
+        }
+        // ── ще не підключений ──
+        None => {
+            let (head, rest) = match text.trim().split_once(char::is_whitespace) {
+                Some((h, r)) => (h.to_lowercase(), r.trim().to_string()),
+                None => (text.trim().to_lowercase(), String::new()),
+            };
+            if head == "/start" || head == "/код" {
+                // Код підключення, якщо його задано: без правильного коду не підключитись.
+                if !c.access_code.is_empty() && rest.trim() != c.access_code {
+                    eprintln!("[botd] ВІДКИНУТО @{username}: /start без коду");
+                    log_cmd(&format!("ВІДКИНУТО:@{username}"), text);
+                    return Some((chat, "потрібен код підключення: /start <код>".to_string()));
+                }
+                let role = if is_admin_name(&username) { Role::Admin } else { Role::Viewer };
+                upsert_user(&mut users, &chat, &username, &name, role);
+                if save_users(&users) {
+                    eprintln!("[botd] підключено @{username} ({}) · роль {}", chat, role.as_str());
+                    log_cmd(&format!("ПІДКЛЮЧЕНО:{}[{}] @{}", chat, role.as_str(), username), text);
+                    Some((chat, greet(role)))
+                } else {
+                    Some((chat, "не зміг зберегти реєстр — спробуй /start ще раз.".to_string()))
+                }
+            } else {
+                // Не підключений — нічого не виконуємо, але й не мовчимо: спроба
+                // записується в журнал, бо мовчазне ігнорування гірше за відомість.
+                eprintln!("[botd] ВІДКИНУТО від @{username} (не підключений)");
+                log_cmd(&format!("НЕПІДКЛЮЧЕНИЙ:@{username}"), text);
+                Some((chat, "Я ще тебе не знаю. Напиши /start — і підключишся.".to_string()))
+            }
+        }
+    }
+}
+
 async fn poll_once(offset: i64) -> Option<i64> {
     let c = cfg();
     let url = format!("https://api.telegram.org/bot{}/getUpdates?timeout={POLL_SECS}&offset={offset}", c.token);
@@ -778,17 +1232,7 @@ async fn poll_once(offset: i64) -> Option<i64> {
         let id = u["update_id"].as_i64().unwrap_or(0);
         if id >= next { next = id + 1; }
         let Some(msg) = u.get("message") else { continue };
-        let Some(text) = msg["text"].as_str() else { continue };
-        let chat = msg["chat"]["id"].as_i64().unwrap_or(0).to_string();
-        let who = msg["from"]["username"].as_str().unwrap_or("").to_lowercase();
-
-        if who != c.user {
-            eprintln!("[botd] ВІДКИНУТО від @{who} (дозволено лише @{})", c.user);
-            log_cmd(&format!("ВІДКИНУТО:@{who}"), text);
-            continue;
-        }
-        log_cmd(&format!("@{who}"), text);
-        let reply = handle(text).await;
+        let Some((chat, reply)) = handle_update(msg).await else { continue };
         for part in chunks(&reply) {
             send_to(&chat, &part).await;
         }
@@ -803,13 +1247,18 @@ async fn main() {
         eprintln!("[botd] нема TELEGRAM_BOT_TOKEN у {}/.env — виходжу", c.root);
         std::process::exit(1);
     }
-    if c.user.is_empty() {
-        // Не «працюємо без обмежень», а саме відмова: бот виконує код на цій машині,
-        // тож без явного власника він не слухає нікого.
-        eprintln!("[botd] TELEGRAM_USERNAME порожній — команди вимкнено, виходжу");
-        std::process::exit(1);
+    if c.admins.is_empty() {
+        // Без власника немає привілейованих команд (довільний shell, запуск бінів,
+        // керування користувачами) — але ДАНІ лишаються доступними тим, хто підключився.
+        // Раніше тут був вихід: тоді бот не слухав нікого взагалі.
+        eprintln!("[botd] ⚠️ TELEGRAM_USERNAME/TELEGRAM_ADMINS порожні — привілейовані команди вимкнено, дані доступні всім підключеним");
+    } else {
+        eprintln!(
+            "[botd] слухаю команди від усіх підключених · адміни: {} · корінь {}",
+            c.admins.iter().map(|a| format!("@{a}")).collect::<Vec<_>>().join(", "),
+            c.root
+        );
     }
-    eprintln!("[botd] слухаю команди від @{} · корінь {}", c.user, c.root);
 
     let mut offset = load_offset();
     let mut fails = 0u32;
@@ -828,5 +1277,173 @@ async fn main() {
                 tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn admins() -> Vec<String> {
+        vec!["vitalii_vedana".to_string()]
+    }
+
+    fn tmp_registry(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("botd-test-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn unknown_chat_has_no_role() {
+        let users = load_users_from("/nonexistent/telegram-users.json");
+        assert_eq!(role_of_in(&users, "111", "someone", &admins()), None);
+    }
+
+    #[test]
+    fn registered_user_gets_viewer_role() {
+        let mut users = load_users_from("/nonexistent/telegram-users.json");
+        upsert_user(&mut users, "111", "someone", "Someone", Role::Viewer);
+        assert_eq!(role_of_in(&users, "111", "someone", &admins()), Some(Role::Viewer));
+    }
+
+    #[test]
+    fn owner_is_admin_by_name_even_without_registration() {
+        let users = load_users_from("/nonexistent/telegram-users.json");
+        assert_eq!(role_of_in(&users, "999", "vitalii_vedana", &admins()), Some(Role::Admin));
+        // Регістр не може звузити права власника: ім'я сильніше.
+        let mut u = users.clone();
+        upsert_user(&mut u, "999", "vitalii_vedana", "Owner", Role::Viewer);
+        assert_eq!(role_of_in(&u, "999", "vitalii_vedana", &admins()), Some(Role::Admin));
+    }
+
+    #[test]
+    fn registry_survives_disk_roundtrip() {
+        let path = tmp_registry("roundtrip");
+        let p = path.to_string_lossy().to_string();
+        let mut users = load_users_from(&p);
+        upsert_user(&mut users, "111", "someone", "Someone", Role::Viewer);
+        upsert_user(&mut users, "222", "owner", "Owner", Role::Admin);
+        assert!(save_users_to(&p, &users));
+
+        let back = load_users_from(&p);
+        assert_eq!(role_of_in(&back, "111", "someone", &admins()), Some(Role::Viewer));
+        assert_eq!(role_of_in(&back, "222", "owner", &admins()), Some(Role::Admin));
+        assert_eq!(users_list(&back).len(), 2);
+
+        // Від'єднання — теж має бути перевірним.
+        let mut u = back;
+        assert!(remove_user(&mut u, "111"));
+        assert!(!remove_user(&mut u, "111"));
+        assert_eq!(role_of_in(&u, "111", "someone", &admins()), None);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn corrupt_registry_does_not_panic() {
+        let path = tmp_registry("corrupt");
+        std::fs::write(&path, b"{not json at all").unwrap();
+        let users = load_users_from(path.to_str().unwrap());
+        assert!(users["users"].is_object());
+        assert!(users_list(&users).is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn viewer_is_rate_limited_and_admin_is_not() {
+        let chat = format!("rate-test-{}", std::process::id());
+        let mut allowed = 0;
+        for _ in 0..20 {
+            if rate_ok(&chat, Role::Viewer) {
+                allowed += 1;
+            }
+        }
+        assert_eq!(allowed, 15, "глядач має бути обмежений 15 командами/хв");
+
+        let admin_chat = format!("rate-admin-{}", std::process::id());
+        let mut admin_allowed = 0;
+        for _ in 0..70 {
+            if rate_ok(&admin_chat, Role::Admin) {
+                admin_allowed += 1;
+            }
+        }
+        assert_eq!(admin_allowed, 60, "власник має мати більший ліміт");
+    }
+
+    /// Корінь для тестів: тимчасова копія з мінімальним .env (є власник).
+    fn ensure_root() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("botd-root-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(dir.join("deploy"));
+            let _ = std::fs::write(
+                dir.join(".env"),
+                "TELEGRAM_USERNAME=owner\nAPP_PASSWORD=viewerpass\nADMIN_PASSWORD=adminpass\n",
+            );
+            std::env::set_var("APP_ROOT", dir.to_string_lossy().to_string());
+            let _ = cfg(); // фіксуємо корінь, поки APP_ROOT ще правильний
+        });
+    }
+
+    /// Повідомлення у вигляді, який приходить з getUpdates (об'єкт message).
+    fn msg(chat: i64, user: &str, name: &str, text: &str) -> Value {
+        json!({
+            "chat": {"id": chat},
+            "from": {"username": user, "first_name": name},
+            "text": text
+        })
+    }
+
+    #[tokio::test]
+    async fn many_users_connect_and_only_owner_gets_shell() {
+        ensure_root();
+
+        // Незнайомець просить /start — і підключається.
+        let (_, reply) = handle_update(&msg(5001, "alice", "Alice", "/start")).await.unwrap();
+        assert!(reply.contains("Підключено"), "відповідь: {reply}");
+        assert!(reply.contains("глядач"), "має бути сказано про роль: {reply}");
+
+        let (_, reply) = handle_update(&msg(5002, "bob", "Bob", "/start")).await.unwrap();
+        assert!(reply.contains("Підключено"), "відповідь: {reply}");
+
+        let users = load_users();
+        assert_eq!(role_of(&users, "5001", "alice"), Some(Role::Viewer));
+        assert_eq!(role_of(&users, "5002", "bob"), Some(Role::Viewer));
+        assert_eq!(users_list(&users).len(), 2);
+
+        // Глядач не ганяє довільний shell на ВМ.
+        let (_, reply) = handle_update(&msg(5001, "alice", "Alice", "!whoami")).await.unwrap();
+        assert!(reply.contains("лише для власника"), "відповідь: {reply}");
+
+        // І не керує користувачами.
+        let (_, reply) = handle_update(&msg(5001, "alice", "Alice", "/користувачі")).await.unwrap();
+        assert!(reply.contains("лише для власника"), "відповідь: {reply}");
+
+        // Власник (за ім'ям у .env) — адмін: список користувачів доступний.
+        let (_, reply) = handle_update(&msg(5003, "owner", "Owner", "/start")).await.unwrap();
+        assert!(reply.contains("власник"), "відповідь: {reply}");
+        let (_, reply) = handle_update(&msg(5003, "owner", "Owner", "/користувачі")).await.unwrap();
+        assert!(reply.contains("Підключені"), "відповідь: {reply}");
+        assert!(reply.contains("alice"), "у списку має бути alice: {reply}");
+    }
+
+    #[tokio::test]
+    async fn unknown_user_is_asked_to_start() {
+        ensure_root();
+        let (_, reply) = handle_update(&msg(6001, "stranger", "Stranger", "/стан")).await.unwrap();
+        assert!(reply.contains("/start"), "відповідь: {reply}");
+        // І в реєстрі його немає.
+        let users = load_users();
+        assert_eq!(role_of(&users, "6001", "stranger"), None);
+    }
+
+    #[test]
+    fn access_code_gates_registration() {
+        // Код підключення не має бути в реєстрі й не має з'являтися в ролях:
+        // перевірка коду — це умова в poll_once, а не стан користувача.
+        let mut users = load_users_from("/nonexistent/telegram-users.json");
+        upsert_user(&mut users, "111", "someone", "Someone", Role::Viewer);
+        assert!(users["users"]["111"]["role"] == "viewer");
+        assert!(users["users"]["111"].get("code").is_none());
     }
 }
