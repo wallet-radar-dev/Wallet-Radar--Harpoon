@@ -6,6 +6,7 @@
 //! cache it, so nobody has to hunt for a numeric id by hand.
 
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 struct Cfg {
@@ -42,7 +43,23 @@ pub fn enabled() -> bool {
 
 pub fn ready() -> bool {
     let c = cfg();
-    !c.token.is_empty() && !c.chat.lock().unwrap().is_empty()
+    if c.token.is_empty() {
+        return false;
+    }
+    if !c.chat.lock().unwrap().is_empty() {
+        return true;
+    }
+    // Реєстр підключених — теж «готовність»: алерти мають кому йти.
+    //
+    // І це важливіше, ніж здається: поки чат не знайдено, сервер сам опитує
+    // Telegram (getUpdates), щоб його знайти. Але тим самим токеном опитує й
+    // бот — і двоє поллерів Telegram не підтримує: один з них відкидається, і
+    // бот починає сипати «опитування не вдалось». Реєстр прибирає другу
+    // половину проблеми: якщо реєстр є, сервер не поллеритиме взагалі.
+    !load_users()["users"]
+        .as_object()
+        .map(|m| m.is_empty())
+        .unwrap_or(true)
 }
 
 /// telegram.js `telegramStatus()`
@@ -52,6 +69,8 @@ pub fn status() -> Value {
         "enabled": enabled(),
         "ready": ready(),
         "username": if c.username.is_empty() { Value::Null } else { Value::String(c.username.clone()) },
+        // Скільки чатів отримує алерти: реєстр підключених + ручний chat_id.
+        "targets": target_chats().len(),
     })
 }
 
@@ -105,29 +124,118 @@ async fn resolve_chat() -> String {
     }
 }
 
+/// Реєстр підключених — `dataset/telegram-users.json`. Його пише бот (через
+/// `POST /api/telegram-users`), і це ЄДИНЕ спільне місце: реєстр живе на сервері,
+/// а не в копії бота, тож алерти сервера йдуть тим самим людям, що й команди бота.
+fn users_path() -> PathBuf {
+    let root = std::env::var("APP_ROOT").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(".."));
+    root.join("dataset").join("telegram-users.json")
+}
+
+/// Прочитати реєстр (порожній, якщо файлу немає).
+pub fn load_users() -> Value {
+    std::fs::read_to_string(users_path())
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .filter(|v: &Value| v["users"].is_object())
+        .unwrap_or_else(|| serde_json::json!({ "users": {} }))
+}
+
+/// Записати реєстр атомарно: спершу .tmp, потім перейменування. Сервер читає цей
+/// файл у будь-який момент, тож обрізаний на half write реєстр — це втрата доступу
+/// для всіх підключених.
+pub fn save_users(v: &Value) -> bool {
+    let path = users_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    match serde_json::to_string_pretty(v) {
+        Ok(body) => {
+            if std::fs::write(&tmp, body).is_err() {
+                return false;
+            }
+            let ok = std::fs::rename(&tmp, &path).is_ok();
+            if !ok {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            ok
+        }
+        Err(_) => false,
+    }
+}
+
+/// Кому слати: усі підключені (крім тих, хто ввімкнув тишу) плюс TELEGRAM_CHAT_ID
+/// (якщо він заданий) — щоб стара ручна настройка не зникла з розсилки.
+pub fn target_chats() -> Vec<String> {
+    targets_from(&load_users())
+}
+
+/// Вибір цілей із реєстру — чиста функція (без файлу й оточення), щоб її можна
+/// було перевірити тестом, не чіпаючи глобальний стан процесу.
+fn targets_from(users: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(map) = users["users"].as_object() {
+        for u in map.values() {
+            if u["muted"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let chat = u["chat"].as_str().unwrap_or("").trim().to_string();
+            if !chat.is_empty() && !out.contains(&chat) {
+                out.push(chat);
+            }
+        }
+    }
+    let c = cfg();
+    let chat = c.chat.lock().unwrap().clone();
+    if !chat.is_empty() && !out.contains(&chat) {
+        out.push(chat);
+    }
+    out
+}
+
 /// telegram.js `sendTelegram` — HTML message, previews off. Every failure is silent:
 /// a broken notification channel must never take down a worker.
+///
+/// Тепер це розсилка: одне повідомлення йде ВСІМ підключеним (хто не ввімкнув
+/// тишу), а не одному чату. Повертає true, якщо хоч кому дійшло.
 pub async fn send(text: &str) -> bool {
     let c = cfg();
     if c.token.is_empty() {
         return false;
     }
-    let chat = {
-        let chat = c.chat.lock().unwrap().clone();
-        chat
+    let targets = target_chats();
+    let targets = if targets.is_empty() {
+        // Реєстру ще немає — піднімаємо старий чат, щоб алерти не зникли.
+        let chat = {
+            let chat = c.chat.lock().unwrap().clone();
+            chat
+        };
+        let chat = if chat.is_empty() { resolve_chat().await } else { chat };
+        if chat.is_empty() {
+            return false;
+        }
+        vec![chat]
+    } else {
+        targets
     };
-    let chat = if chat.is_empty() { resolve_chat().await } else { chat };
-    if chat.is_empty() {
-        return false;
-    }
+
     let url = format!("https://api.telegram.org/bot{}/sendMessage", c.token);
-    let body = serde_json::json!({
-        "chat_id": chat,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": true,
-    });
-    matches!(http().post(&url).json(&body).send().await, Ok(r) if r.status().is_success())
+    let mut any = false;
+    for chat in targets {
+        let body = serde_json::json!({
+            "chat_id": chat,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": true,
+        });
+        match http().post(&url).json(&body).send().await {
+            Ok(r) if r.status().is_success() => any = true,
+            Ok(r) => tracing::warn!("[telegram] чат {chat}: HTTP {}", r.status().as_u16()),
+            Err(e) => tracing::warn!("[telegram] чат {chat}: {e}"),
+        }
+    }
+    any
 }
 
 /// telegram.js `startTelegram` — keep trying to resolve the chat until the user presses
@@ -185,5 +293,19 @@ mod tests {
     fn no_updates_means_no_chat() {
         assert_eq!(pick_chat(&json!({"result": []}), ""), None);
         assert_eq!(pick_chat(&json!({}), ""), None);
+    }
+
+    /// Реєстр — спільне місце: записи з нього стають адресатами алертів.
+    #[test]
+    fn registry_chats_become_alert_targets_and_muted_are_skipped() {
+        let users = json!({"users": {
+            "111": {"chat": "111", "username": "a", "role": "viewer", "muted": false},
+            "222": {"chat": "222", "username": "b", "role": "viewer", "muted": true},
+            "333": {"chat": "333", "username": "c", "role": "admin", "muted": false}
+        }});
+        let targets = targets_from(&users);
+        assert!(targets.contains(&"111".to_string()), "підключений має отримувати алерти");
+        assert!(!targets.contains(&"222".to_string()), "заглушений — не має");
+        assert!(targets.contains(&"333".to_string()), "адмін — має");
     }
 }

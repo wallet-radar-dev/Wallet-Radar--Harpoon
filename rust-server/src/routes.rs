@@ -201,6 +201,32 @@ pub async fn telegram_status() -> impl IntoResponse {
     Json(telegram::status())
 }
 
+/// `POST /api/telegram-users` — бот пише реєстр підключених у спільне місце.
+///
+/// Доступ: або адмінський Basic, або окремий `X-Telegram-Sync-Token`. Останнє — бо
+/// в бота й сервера РІЗНІ паролі адміна, а ділитися паролем адміна з ботом не
+/// треба: доступ тут вузький (запис одного файлу), і токен можна відкликати
+/// окремо від пароля.
+pub async fn telegram_users_upsert(body: String) -> axum::response::Response {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "не-JSON тіло"}))).into_response();
+    };
+    if !v["users"].is_object() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "потрібен об'єкт {users:{...}}"}))).into_response();
+    }
+    if telegram::save_users(&v) {
+        let n = v["users"].as_object().map(|m| m.len()).unwrap_or(0);
+        Json(json!({"ok": true, "users": n, "targets": telegram::target_chats().len()})).into_response()
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "не зміг записати реєстр"}))).into_response()
+    }
+}
+
+/// `GET /api/telegram-users` — реєстр і скільки чатів реально отримує алерти.
+pub async fn telegram_users_get() -> impl IntoResponse {
+    Json(json!({"users": telegram::load_users(), "targets": telegram::target_chats().len()}))
+}
+
 
 /// index.js:1164 — deliberately fails, so GlitchTip/Sentry capture can be tested.
 /// The thrown message never reaches the client: Express's error handler answers 500
@@ -885,7 +911,17 @@ pub struct ProfileQuery {
 
 
 /// index.js requireAdmin GET routes — viewers get 403 here.
-pub const ADMIN_PATHS: &[&str] = &["/api/portfolio-backtest", "/api/strategy-backtest"];
+pub const ADMIN_PATHS: &[&str] = &[
+    "/api/portfolio-backtest",
+    "/api/strategy-backtest",
+    // Реєстр підключених Telegram: читати може лише адмін (а записати — бот
+    // окремим токеном синхронізації).
+    "/api/telegram-users",
+    // Асистент сервера вміє піднімати склад груп капіталу — тобто нашу внутрішню
+    // базу гаманців. Глядачам вона недоступна: вони бачать транзакції, сигнали,
+    // ринок і стан моніторів, але не склад груп.
+    "/api/ask",
+];
 
 
 /// index.js `requireAdmin` — the two GET routes above, plus every wallet mutation
@@ -922,6 +958,17 @@ pub async fn gate_mw(State(auth): State<Arc<auth::AuthState>>, ConnectInfo(peer)
     if path == "/webhook/moralis" || path == "/ws"
         || path == "/login.html" || path == "/api/login" || path == "/api/logout" {
         return next.run(req).await;
+    }
+    // Реєстр підключених Telegram: бот пише його окремим токеном синхронізації.
+    // Basic-пароль адміна тут не підходить — у бота й сервера різні паролі, а
+    // ділитися паролем адміна з ботом не треба. Якщо токен не збігся — запит іде
+    // звичайним шляхом (адмінський Basic).
+    if path == "/api/telegram-users" && req.method() == axum::http::Method::POST {
+        let want = std::env::var("TELEGRAM_SYNC_TOKEN").unwrap_or_default();
+        let got = req.headers().get("x-telegram-sync-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+        if !want.is_empty() && got == want {
+            return next.run(req).await;
+        }
     }
     let ip = client_ip(&req, peer);
 
@@ -967,7 +1014,7 @@ pub async fn gate_mw(State(auth): State<Arc<auth::AuthState>>, ConnectInfo(peer)
 
     // 3) admin-only paths
     if role == auth::Role::Viewer && requires_admin(req.method(), &path) {
-        return (StatusCode::FORBIDDEN, Json(json!({"error": "Режим перегляду — зміна даних недоступна"}))).into_response();
+        return (StatusCode::FORBIDDEN, Json(json!({"error": "Режим перегляду — цей розділ глядачам недоступний"}))).into_response();
     }
 
     // 4) rate limit — viewers only

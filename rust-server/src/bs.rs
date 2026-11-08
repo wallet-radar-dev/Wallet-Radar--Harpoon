@@ -32,12 +32,15 @@ fn host(chain: &str) -> Option<&'static str> {
     Some(match chain {
         "eth" => "https://eth.blockscout.com",
         "base" => "https://base.blockscout.com",
-        "optimism" => "https://optimism.blockscout.com",
+        // Перевірено 2026-11-07: optimism.blockscout.com віддає 301 на explorer.optimism.io
+        // (той самий Blockscout, інстанс переїхав). Старе ім'я лише додавало редирект.
+        "optimism" => "https://explorer.optimism.io",
         "gnosis" => "https://gnosis.blockscout.com",
         "polygon" => "https://polygon.blockscout.com",
         "arbitrum" => "https://arbitrum.blockscout.com",
         "zksync" => "https://zksync.blockscout.com",
-        "scroll" => "https://scroll.blockscout.com",
+        // Перевірено 2026-11-07: scroll.blockscout.com віддає 301 на scrollscan.com.
+        "scroll" => "https://scrollscan.com",
         "mode" => "https://explorer.mode.network",
         "fraxtal" => "https://fraxscan.blockscout.com",
         "blast" => "https://blast.blockscout.com",
@@ -120,7 +123,15 @@ async fn raw_get(url: &str, timeout: Duration) -> anyhow::Result<Option<Value>> 
     if !resp.status().is_success() {
         anyhow::bail!("HTTP {status}");
     }
-    Ok(Some(resp.json::<Value>().await?))
+    // JSON ми очікуємо від API. HTML натомість — це інстанс, який переїхав (редирект на
+    // Etherscan-родину, як linea → lineascan.build), або Cloudflare-челендж. І те, й те
+    // означає: цього ендпоінта для нас більше нема — треба сказати про це прямо, а не
+    // розбирати HTML у парсер і отримувати «0 переказів».
+    let body = resp.text().await?;
+    match serde_json::from_str::<Value>(&body) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => anyhow::bail!("non-JSON response ({e}) — endpoint moved, redirected or bot-blocked"),
+    }
 }
 
 /// blockscout.js `cached(key, ttl, fn)` — the response cache the Rust port never had.
@@ -447,14 +458,22 @@ fn routescan_cid(chain: &str) -> Option<u64> {
 /// were each verified live with our key; they were silently on Blockscout's 50-item
 /// pages while a 1000-item source was available. Re-probe before editing: coverage is
 /// Etherscan's pricing decision, not a constant.
+///
+/// Перевірено нашим ключем 2026-11-07, тому ДВА записи тут прибрано:
+/// - gnosis (100) → «Free API access is not supported for this chain»: без платного
+///   плану Etherscan для нього не відповідає взагалі, тож запит лише витрачав квоту.
+/// - blast (81457) → «Missing or unsupported chainid»: Etherscan V2 цей ланцюг не індексує
+///   взагалі (не «заборонено», а відсутній у списку). Blast і так покритий Routescan.
+///
+/// celo (42220) лишається: він у списку, але на спільному безкоштовному ліміті «Community
+/// Free API Limit reached» — він скидається о 00:00 UTC, тож запит не даремний, лише
+/// тимчасово віддає порожній результат.
 fn etherscan_cid(chain: &str) -> Option<u64> {
     Some(match chain {
         "eth" => 1,
         "arbitrum" => 42161,
         "polygon" => 137,
-        "gnosis" => 100,
         "linea" => 59144,
-        "blast" => 81457,
         "mantle" => 5000,
         "fraxtal" => 252,
         "celo" => 42220,
@@ -513,7 +532,10 @@ async fn es_get(query: &[(&str, String)], key: Option<&str>) -> Option<Value> {
             tracing::warn!("[es] Etherscan відхилив за лімітом (спроба {}/3) — сателіт жене понад квоту акаунта?", attempt + 1);
             tokio::time::sleep(Duration::from_millis(1000 * (attempt as u64 + 1))).await;
         }
-        tracing::error!("[es] Etherscan відхиляв за лімітом усі 3 спроби — запит втрачено");
+        // Квота, а не поломка: спільний безкоштовний ліміт Etherscan скидається о 00:00 UTC
+        // і сам по собі не є дефектом програми. Тому WARN, а не ERROR — інакше кожна
+        // відмова за квоту падала б у GlitchTip і глушила справжні збої в око моніторингу.
+        tracing::warn!("[es] Etherscan відхиляв за лімітом усі 3 спроби — запит втрачено (квота скидається о 00:00 UTC)");
         return None;
     }
 
@@ -554,12 +576,23 @@ async fn es_get(query: &[(&str, String)], key: Option<&str>) -> Option<Value> {
 
 /// An Etherscan-dialect rate-limit refusal: HTTP 200, `status: "0"`, and a `result`
 /// that says so. Distinct from `"No transactions found"`, which is a real answer.
+///
+/// Перевірено 2026-11-07: окрім звичного «Max rate limit reached», Etherscan на
+/// спільному безкоштовному тарифі віддає «Community Free API Limit reached. Resets
+/// 2026-11-08 00:00:00 UTC». Раніше цей текст НЕ впізнавався, і відмова за квоту
+/// перетворювалася на «джерело померло»: ланцюг (linea, celo) втрачав і ті сторінки,
+/// які Etherscan віддав би за хвилину. «Limit reached» — це не смерть джерела, це
+/// привід повторити запит.
 fn is_rate_limited(d: &Value) -> bool {
     if d["status"].as_str() == Some("1") {
         return false;
     }
     let result = d["result"].as_str().unwrap_or("").to_lowercase();
-    result.contains("rate limit") || result.contains("too many")
+    result.contains("rate limit")
+        || result.contains("too many")
+        || result.contains("limit reached")
+        || result.contains("free api limit")
+        || result.contains("quota")
 }
 
 /// routescan.js `schedule` — serialize all Routescan calls ≥220ms apart.
@@ -568,24 +601,38 @@ fn rs_gate() -> &'static Mutex<Instant> {
     G.get_or_init(|| Mutex::new(Instant::now() - Duration::from_millis(220)))
 }
 
+/// Routescan без ключа: добовий ліміт і спільна черга без запиту.
+/// 429/503 — це не «джерело мертве», а «зараз не дадуть»: короткий відступ і повтор
+/// рятують blast (у нього Routescan — єдине глибоке джерело).
 async fn rs_get(cid: u64, params: &str) -> Option<Value> {
-    let wait = {
-        let mut last = rs_gate().lock().unwrap();
-        let now = Instant::now();
-        let start = now.max(*last + Duration::from_millis(220));
-        *last = start;
-        start.saturating_duration_since(now)
-    };
-    if !wait.is_zero() {
-        tokio::time::sleep(wait).await;
-    }
     let url = format!("https://api.routescan.io/v2/network/mainnet/evm/{cid}/etherscan/api?{params}");
-    let resp =
-        client().http.get(&url).header("accept", "application/json").timeout(TXLIST_TIMEOUT).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
+    for attempt in 0..3u32 {
+        let wait = {
+            let mut last = rs_gate().lock().unwrap();
+            let now = Instant::now();
+            let start = now.max(*last + Duration::from_millis(220));
+            *last = start;
+            start.saturating_duration_since(now)
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+        let Ok(resp) = client().http.get(&url).header("accept", "application/json").timeout(TXLIST_TIMEOUT).send().await
+        else {
+            return None;
+        };
+        let status = resp.status().as_u16();
+        if status == 429 || status == 503 {
+            tracing::warn!("[rs] Routescan відхилив за лімітом (спроба {}/3)", attempt + 1);
+            tokio::time::sleep(Duration::from_millis(1500 * (attempt as u64 + 1))).await;
+            continue;
+        }
+        if !resp.status().is_success() {
+            return None;
+        }
+        return resp.json::<Value>().await.ok();
     }
-    resp.json::<Value>().await.ok()
+    None
 }
 
 /// blockscout.js `tokenTransfers` — a wallet's ERC-20 transfers (single page),
@@ -887,15 +934,36 @@ pub async fn token_balances_raw(chain: &str, address: &str) -> Vec<Value> {
             // The explorer is gone, not the holdings. Returning [] here is what made a
             // wallet's linea/blast/mantle/sonic positions invisible in every balance we
             // report — an empty list reads as "owns nothing", which is a lie.
-            if let Some(v) = crate::moralis::token_balances(chain, address).await {
-                tracing::debug!("[tb] {chain} {address} via moralis: {} tokens", v.len());
-                cache_set(&key, &Value::Array(v.clone()));
-                return v;
+            //
+            // Moralis' відмова тепер розрізнена: «не знає ланцюг» (справді не закриємо)
+            // проти «акаунт на паузі» (закриється, але це не вина ланцюга). Раніше обидва
+            // випадки логвалися однаково, і справжня причина — зупинений план Moralis —
+            // була невидимою.
+            match crate::moralis::token_balances(chain, address).await {
+                Ok(v) => {
+                    tracing::debug!("[tb] {chain} {address} via moralis: {} tokens", v.len());
+                    cache_set(&key, &Value::Array(v.clone()));
+                    return v;
+                }
+                Err(crate::moralis::BalancesError::UnsupportedChain) => {
+                    tracing::warn!(
+                        "[tb] {chain} {address}: blockscout down and moralis does not cover this chain — \
+                         token balances are UNKNOWN, reported as empty"
+                    );
+                }
+                Err(crate::moralis::BalancesError::AccountBlocked(why)) => {
+                    tracing::warn!(
+                        "[tb] {chain} {address}: Moralis відмовив ({why}) — баланси на {chain} НЕВІДОМІ \
+                         (порожньо ≠ «нічого не має»)"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[tb] {chain} {address}: blockscout down and moralis failed ({e}) — \
+                         token balances are UNKNOWN, reported as empty"
+                    );
+                }
             }
-            tracing::warn!(
-                "[tb] {chain} {address}: blockscout down and moralis does not cover this chain — \
-                 token balances are UNKNOWN, reported as empty"
-            );
             return vec![];
         }
     };
@@ -1137,7 +1205,13 @@ fn mark_host_dead(chain: &str) {
 /// attribution. A 429 or a timeout must therefore NOT count — only a structural refusal.
 fn is_structural_failure(e: &anyhow::Error) -> bool {
     let s = e.to_string();
-    s.contains("HTTP 404") || s.contains("HTTP 403") || s.contains("HTTP 410")
+    s.contains("HTTP 404")
+        || s.contains("HTTP 403")
+        || s.contains("HTTP 410")
+        // HTML замість JSON: інстанс переїхав або нас блокує Cloudflare. Це теж «ендпоінта
+        // для нас нема» — інакше ми б по 50 сторінок тягнули з мертвого хоста й писали
+        // «fallback на v2», коли даних не було взагалі.
+        || s.contains("non-JSON response")
 }
 
 /// Blockscout's Etherscan-compatible `/api?module=account&action=txlist` — the SAME
@@ -1197,7 +1271,20 @@ async fn bs_native_transfers(chain: &str, address: &str, max_pages: u32) -> Vec<
     let mut params = String::new();
     for _ in 0..max_pages {
         let path = format!("/api/v2/addresses/{address}/transactions{params}");
-        let Ok(d) = bget(host, &path).await else { break };
+        let d = match bget(host, &path).await {
+            Ok(d) => d,
+            Err(e) => {
+                // Перша сторінка не прийшла. Мертвим рахуємо лише СТРУКТУРНУ відмову
+                // (404/403/410 — інстанс зник). 429 або таймаут — це «зараз не дадуть»,
+                // і позначати ним хост мертвим на 30 хвилин означало б відрубати живий
+                // інстанс під час спільної черги. Раніше саме це й робило оптимізм
+                // «без джерела» навіть тоді, коли explorer.optimism.io віддавав 200.
+                if params.is_empty() && is_structural_failure(&e) {
+                    mark_host_dead(chain);
+                }
+                break;
+            }
+        };
         for it in d["items"].as_array().unwrap_or(&vec![]) {
             let amount = num(&it["value"]) / 1e18;
             if amount == 0.0 {
@@ -1279,11 +1366,21 @@ async fn native_transfers_uncached(chain: &str, address: &str, max_pages: u32, p
     // the txlist APIs would have returned in full comes back truncated — funder-derived
     // features quietly lose members.
     let v = bs_native_transfers(chain, address, max_pages).await;
-    tracing::warn!(
-        "[nt] {chain} {address}: no txlist source (etherscan/routescan/bs-compat all unavailable), \
-         fell back to Blockscout v2 50-item pages ({} transfers)",
-        v.len()
-    );
+    if host_is_dead(chain) {
+        // Найгірший випадок: не просто «глибше джерело недоступне», а ЖОДНОГО джерела немає.
+        // Раніше це виглядало як звичайний фолбек на 50-сторінкові сторінки, хоча насправді
+        // і history, і balances були порожніми — і ніхто не знав, що даних немає взагалі.
+        tracing::warn!(
+            "[nt] {chain} {address}: НЕМАЄ ЖОДНОГО джерела native-переказів \
+             (etherscan/routescan/bs-compat недоступні, Blockscout v2 теж мертвий) — історія порожня"
+        );
+    } else {
+        tracing::warn!(
+            "[nt] {chain} {address}: no txlist source (etherscan/routescan/bs-compat all unavailable), \
+             fell back to Blockscout v2 50-item pages ({} transfers)",
+            v.len()
+        );
+    }
     v
 }
 

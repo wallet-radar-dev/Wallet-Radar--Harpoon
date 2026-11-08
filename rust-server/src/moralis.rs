@@ -12,8 +12,8 @@
 
 use crate::jsmath::js_num;
 use serde_json::{json, Value};
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Moralis' chain enum. Verified live against our key — blast (0x13e31), mantle (0x1388)
 /// and sonic (0x92) are deliberately ABSENT: Moralis rejects all three, and listing them
@@ -80,35 +80,130 @@ pub fn parse_balances(d: &Value) -> Vec<Value> {
     out
 }
 
-/// `None` = no key, chain Moralis does not know, or the fetch failed — all cases where
-/// the caller must NOT read the result as "this wallet holds nothing".
-pub async fn token_balances(chain: &str, address: &str) -> Option<Vec<Value>> {
-    let param = chain_param(chain)?;
+/// Чому Moralis не дав балансів.
+///
+/// Різниця між «Moralis не знає цього ланцюга» і «акаунт Moralis заблоковано» — це різниця
+/// між «цього гаманця тут не існує» і «ми не можемо запитати зараз». Раніше обидва випадки
+/// зливалися в `None`, а лог виправдовував порожній список балансів словами «moralis не
+/// покриває цей ланцюг» — тобто ми тихо брехали про причину: ланцюг Moralis покриває,
+/// просто акаунт на паузі.
+#[derive(Debug, Clone)]
+pub enum BalancesError {
+    /// Moralis не знає цього ланцюга (і не дізнається) — лише цей ланцюг не варто питати.
+    UnsupportedChain,
+    /// Акаунт/ключ Moralis відмовив: план зупинено або ключ недійсний (401/403).
+    AccountBlocked(String),
+    /// Мережа, 5xx або неочікувана відповідь — можливо, тимчасово.
+    FetchFailed(String),
+}
+
+impl std::fmt::Display for BalancesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BalancesError::UnsupportedChain => write!(f, "Moralis не знає цього ланцюга"),
+            BalancesError::AccountBlocked(m) => write!(f, "Moralis відмовив: {m}"),
+            BalancesError::FetchFailed(m) => write!(f, "Moralis не відповів: {m}"),
+        }
+    }
+}
+
+/// Скільки пам'ятаємо про заблокований акаунт Moralis.
+///
+/// Без цього кожен гаманець у черзі б'є в Moralis (і через сателіт — теж), а відповідь
+/// одна й та сама: план зупинено. На реальному профілі це тисячі однакових 401 за хвилину,
+/// що глушить і справжні помилки в журналі.
+const BLOCKED_TTL: Duration = Duration::from_secs(1800);
+
+fn blocked_memo() -> &'static Mutex<Option<(Instant, String)>> {
+    static M: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(None))
+}
+
+/// Moralis відмовив — запам'ятати на [`BLOCKED_TTL`], щоб не питати знову щохвилини.
+fn remember_blocked(msg: &str) {
+    let mut m = blocked_memo().lock().unwrap();
+    *m = Some((Instant::now(), msg.to_string()));
+}
+
+/// Акаунт Moralis заблоковано нещодавно? Тоді не йдемо в мережу зовсім.
+fn blocked_reason() -> Option<String> {
+    let m = blocked_memo().lock().unwrap();
+    m.as_ref()
+        .filter(|(at, _)| at.elapsed() < BLOCKED_TTL)
+        .map(|(_, msg)| msg.clone())
+}
+
+/// Баланси ERC-20 з Moralis.
+///
+/// `Err` — не «нуль», а «невідомо»: усі три варіанти означають, що викликач НЕ має права
+/// читати результат як «гаманець нічого не має».
+pub async fn token_balances(chain: &str, address: &str) -> Result<Vec<Value>, BalancesError> {
+    let param = chain_param(chain).ok_or(BalancesError::UnsupportedChain)?;
+
+    // Акаунт уже відмовив — не довбимо те саме питання в стіну.
+    if let Some(msg) = blocked_reason() {
+        return Err(BalancesError::AccountBlocked(msg));
+    }
 
     // Суворий режим: ключ живе на сателіті, кор його не має й мати не повинен.
-    let d = if crate::satellite::strict() {
-        crate::satellite::fetch_json(
+    let (status, body) = if crate::satellite::strict() {
+        crate::satellite::fetch(
             "moralis",
             &format!("/api/v2.2/wallets/{address}/tokens"),
             &[("chain", param.to_string())],
         )
         .await
-        .ok()?
+        .map_err(|e| BalancesError::FetchFailed(e.to_string()))?
     } else {
-        let key = api_key()?;
+        let key = api_key().ok_or_else(|| BalancesError::FetchFailed("немає ключа Moralis".into()))?;
         let url = format!("https://deep-index.moralis.io/api/v2.2/wallets/{address}/tokens?chain={param}");
-        let resp = http().get(&url).header("X-API-Key", key).header("accept", "application/json").send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        resp.json::<Value>().await.ok()?
+        let resp = http()
+            .get(&url)
+            .header("X-API-Key", key)
+            .header("accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| BalancesError::FetchFailed(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| BalancesError::FetchFailed(e.to_string()))?
+            .to_vec();
+        (status, body)
     };
+
+    let d: Value = serde_json::from_slice(&body)
+        .map_err(|e| BalancesError::FetchFailed(format!("не-JSON відповідь: {e}")))?;
+
+    if !(200..300).contains(&status) {
+        // Тіло Moralis каже ЧОМУ: «Your Moralis Free usage is paused…» або «Invalid API Key».
+        // Саме це треба показати в логу, а не «ланцюг не покритий».
+        let msg = d["message"].as_str().unwrap_or("").trim().to_string();
+        let looks_blocked = status == 401
+            || status == 403
+            || msg.contains("paused")
+            || msg.contains("Invalid API Key")
+            || msg.contains("upgrade")
+            || msg.contains("suspended");
+        if looks_blocked {
+            let why = if msg.is_empty() { format!("HTTP {status}") } else { msg };
+            remember_blocked(&why);
+            return Err(BalancesError::AccountBlocked(why));
+        }
+        return Err(BalancesError::FetchFailed(format!("HTTP {status}: {msg}")));
+    }
+
     // A body carrying `message` instead of `result` is Moralis refusing (unknown chain,
     // too many balances, bad key) — a failure, not an empty wallet.
     if !d["result"].is_array() {
-        return None;
+        let msg = d["message"].as_str().unwrap_or("").to_string();
+        if msg.contains("chain must be") {
+            return Err(BalancesError::UnsupportedChain);
+        }
+        return Err(BalancesError::FetchFailed(msg));
     }
-    Some(parse_balances(&d))
+    Ok(parse_balances(&d))
 }
 
 #[cfg(test)]
