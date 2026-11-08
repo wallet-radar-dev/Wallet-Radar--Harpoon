@@ -1155,6 +1155,27 @@ async fn diag(caller: &Caller) -> String {
     // тож беремо її з API_HOST, як в решті місць.
     let url = format!("http://{}:{}/api/ask?q=%D1%82%D0%B5%D1%81%D1%82", c.api_host, c.port);
     let (login, pass) = api_creds(caller.role);
+    if caller.role != Role::Admin {
+        // Глядачу асистент сервера закритий свідомо: він уміє піднімати склад
+        // груп — нашу внутрішню базу. Не робимо йому навмисної HTTP-проби,
+        // щоб не ламати ліміт запитів заради перевірки: пояснюємо просто.
+        out.push_str("асистент /api/ask: 🚫 закритий для глядача (внутрішня база гаманців)\n");
+        out.push_str("питання без асистента: ✅ читається з даних (токен, монітори, сигнали)\n");
+        // модель
+        let o = match http().get("http://127.0.0.1:11434/api/tags").send().await {
+            Ok(r) if r.status().is_success() => "✅ доступна".to_string(),
+            Ok(r) => format!("⚠️ HTTP {}", r.status().as_u16()),
+            Err(e) => format!("❌ {}", e),
+        };
+        out.push_str(&format!("Ollama: {}\n", esc(&o)));
+        out.push_str(&format!(
+            "інструменти: {}\n",
+            if tool_exec("monitors_status", &json!({}), caller.role).contains("МОНІТОР") {
+                "✅ читають дані"
+            } else { "⚠️ порожньо" }
+        ));
+        return out;
+    }
     let a = match http().get(&url).basic_auth(login, Some(pass)).send().await {
         Ok(r) if r.status().is_success() => "✅ відповідає".to_string(),
         Ok(r) => format!("⚠️ HTTP {}", r.status().as_u16()),

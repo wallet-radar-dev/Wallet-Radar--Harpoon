@@ -917,6 +917,10 @@ pub const ADMIN_PATHS: &[&str] = &[
     // Реєстр підключених Telegram: читати може лише адмін (а записати — бот
     // окремим токеном синхронізації).
     "/api/telegram-users",
+    // Асистент сервера вміє піднімати склад груп капіталу — тобто нашу внутрішню
+    // базу гаманців. Глядачам вона недоступна: вони бачать транзакції, сигнали,
+    // ринок і стан моніторів, але не склад груп.
+    "/api/ask",
 ];
 
 
@@ -1010,7 +1014,7 @@ pub async fn gate_mw(State(auth): State<Arc<auth::AuthState>>, ConnectInfo(peer)
 
     // 3) admin-only paths
     if role == auth::Role::Viewer && requires_admin(req.method(), &path) {
-        return (StatusCode::FORBIDDEN, Json(json!({"error": "Режим перегляду — зміна даних недоступна"}))).into_response();
+        return (StatusCode::FORBIDDEN, Json(json!({"error": "Режим перегляду — цей розділ глядачам недоступний"}))).into_response();
     }
 
     // 4) rate limit — viewers only
