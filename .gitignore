@@ -80,3 +80,9 @@ dataset/retro/
 # спробі закомітити крейт в індекс полізли тисячі файлів .fingerprint.
 target/
 seed/
+
+# Стан Telegram-бота: реєстр підключених і курсор авторозсилки. Це runtime-стан,
+# а не код — у git йому не місце (інакше реєстр з чатами потрапить у репозиторій).
+deploy/telegram-users.json
+deploy/telegram-users.json.tmp.*
+deploy/telegram-signal-cursor.json

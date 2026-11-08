@@ -234,13 +234,19 @@ fn save_users(v: &Value) -> bool {
 }
 
 fn save_users_to(path: &str, v: &Value) -> bool {
-    let tmp = format!("{path}.tmp");
+    // tmp-файл із PID: два процеси (або два тести) не б'ються за одне ім'я, інакше
+    // rename одного зникне під other's write — і реєстр не збережеться.
+    let tmp = format!("{path}.tmp.{}", std::process::id());
     match serde_json::to_string_pretty(v) {
         Ok(body) => {
             if std::fs::write(&tmp, body).is_err() {
                 return false;
             }
-            std::fs::rename(&tmp, path).is_ok()
+            let ok = std::fs::rename(&tmp, path).is_ok();
+            if !ok {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            ok
         }
         Err(_) => false,
     }
@@ -298,6 +304,126 @@ fn users_list(users: &Value) -> Vec<Value> {
         .as_object()
         .map(|m| m.values().cloned().collect())
         .unwrap_or_default()
+}
+
+/// Кому можна розсилати: усі підключені, крім тих, хто сам попросив тишу.
+fn broadcast_targets() -> Vec<String> {
+    let users = load_users();
+    let mut out: Vec<String> = users_list(&users)
+        .iter()
+        .filter(|u| !u["muted"].as_bool().unwrap_or(false))
+        .map(|u| u["chat"].as_str().unwrap_or("").to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    out.sort();
+    out.truncate(500); // Telegram не любить сотні спамів за раз
+    out
+}
+
+/// Розсилає текст усім підключеним. Повертає (доставлено чатів, чатів з помилкою).
+///
+/// Розсилка йде послідовно, з паузою: Telegram відкидає бурст, і десяток чатів
+/// підряд — це нормально, а сотня — відмова.
+async fn broadcast(text: &str) -> (usize, usize) {
+    let targets = broadcast_targets();
+    let mut ok = 0usize;
+    let mut err = 0usize;
+    for chat in targets {
+        let mut good = true;
+        for part in chunks(text) {
+            if !send_to(&chat, &part).await {
+                good = false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        if good { ok += 1; } else { err += 1; }
+    }
+    (ok, err)
+}
+
+/// Курсор авторозсилки сигналів: до якого `ts` ми вже відправили.
+fn signal_cursor_path() -> String {
+    format!("{}/deploy/telegram-signal-cursor.json", cfg().root)
+}
+
+/// Читає курсор. Якщо файлу немає — повертає «ще нічого не надсилали» (0), і тоді
+/// pending_signals() ініціалізує курсор по найновішому сигналу: інакше перший же
+/// запуск ботa заливить усіх сторима історією.
+fn load_signal_cursor() -> u64 {
+    read_json(&signal_cursor_path())
+        .and_then(|v| v["ts"].as_u64())
+        .unwrap_or(0)
+}
+
+fn save_signal_cursor(ts: u64) {
+    let path = signal_cursor_path();
+    let _ = std::fs::write(path, format!("{{\"ts\":{ts}}}"));
+}
+
+/// Сигнали, які ще не розіслано.
+fn pending_signals() -> Vec<Value> {
+    let r = &cfg().root;
+    let Some(feed) = read_json(&format!("{r}/dataset/alpha-feed.json")) else {
+        return vec![];
+    };
+    let empty = vec![];
+    let mut items: Vec<Value> = feed.as_array().unwrap_or(&empty).clone();
+    items.sort_by_key(|i| i["ts"].as_u64().unwrap_or(0));
+    let cursor = load_signal_cursor();
+    let mut pending: Vec<Value> = items
+        .into_iter()
+        .filter(|i| i["ts"].as_u64().unwrap_or(0) > cursor)
+        .collect();
+    if cursor == 0 {
+        // Перший запуск: не заливаємо історією — стартуємо від найновішого.
+        if let Some(last) = pending.last() {
+            let ts = last["ts"].as_u64().unwrap_or(0);
+            save_signal_cursor(ts);
+            pending.clear();
+        }
+    }
+    pending
+}
+
+/// Формат одного сигналу для розсилки.
+fn signal_text(it: &Value) -> String {
+    let ts = it["ts"].as_u64().unwrap_or(0);
+    let addr = it["address"].as_str().unwrap_or("");
+    let toks = it["tokens"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", "))
+        .unwrap_or_default();
+    format!(
+        "<b>Сигнал</b>\n{} <code>{}</code>\n<i>{}</i>",
+        esc(&toks),
+        esc(&short(addr)),
+        if ts > 0 { ago(ts / 1000) } else { "—".to_string() }
+    )
+}
+
+/// Автодоставка нових сигналів усім підключеним. Повертає кількість розісланих.
+async fn broadcast_signals_once() -> usize {
+    let pending = pending_signals();
+    if pending.is_empty() {
+        return 0;
+    }
+    let targets = broadcast_targets();
+    if targets.is_empty() {
+        return 0;
+    }
+    let mut sent = 0usize;
+    for it in pending.into_iter().take(10) {
+        let ts = it["ts"].as_u64().unwrap_or(0);
+        let text = format!("{}\n\n{}", signal_text(&it), "Дані проєкту Wallet Radar · /сигнали — історія");
+        let (ok, _err) = broadcast(&text).await;
+        if ok == 0 {
+            // Нікому не дійшло — не рухаємо курсор, спробуємо наступного разу.
+            break;
+        }
+        save_signal_cursor(ts);
+        sent += 1;
+    }
+    sent
 }
 
 /// Скільки команд на хвилину дозволено одному чату.
@@ -381,6 +507,10 @@ async fn handle(text: &str, caller: &Caller) -> String {
         }
         "/діагностика" | "/diag" => diag(caller).await,
         "/хтоя" | "/whoami" => whoami(caller),
+        "/рассылка" | "/розсилка" | "/broadcast" => {
+            if is_admin { broadcast_cmd(&rest).await } else { denied("розсилка всім") }
+        }
+        "/тиша" | "/mute" => mute_cmd(caller),
         "/користувачі" | "/users" => {
             if is_admin { users_cmd() } else { denied("список користувачів") }
         }
@@ -420,12 +550,15 @@ fn help(role: Role) -> String {
      /хтоя — мій чат, роль і ліміт\n\n\
      <b>Питання</b>\n\
      Напиши питання без слеша — піде в асистента, а якщо той\n\
-     не впізнає, відповість локальна модель (буде позначено).";
+     не впізнає, відповість локальна модель (буде позначено).\n\n\
+     /тиша — не присилати тобі сигнали й розсилки (лишаєшся підключеним)";
     if role != Role::Admin {
         return format!("{base}\n\nДані проєкту спільні для всіх підключених.");
     }
     format!("{base}\n\n\
      <b>Дії (лише власник)</b>\n\
+     /рассылка <текст> — розіслати повідомлення всім підключеним\n\
+     /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
      /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
      /поріг — показати збережені параметри\n\
      /поріг cexsignal MIN_USD=500000 — змінити й запам'ятати\n\
@@ -455,6 +588,39 @@ fn whoami(c: &Caller) -> String {
         c.role.as_str(),
         match c.role { Role::Admin => 60, Role::Viewer => 15 }
     )
+}
+
+/// Розсилка довільного тексту всім підключеним — команда власника.
+async fn broadcast_cmd(text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return "що розсилати? /рассылка <текст>".to_string();
+    }
+    log_cmd("РОЗСИЛКА", text);
+    let (ok, err) = broadcast(text).await;
+    if ok == 0 && err == 0 {
+        return "підключених немає — розсилати нікому.".to_string();
+    }
+    format!("доставлено {ok} підключеним{}", if err > 0 { format!(", з помилкою {err}") } else { String::new() })
+}
+
+/// Тиша — користувач лишається підключеним, але йому не приходить розсилка.
+fn mute_cmd(caller: &Caller) -> String {
+    let mut users = load_users();
+    let Some(rec) = users["users"].get(&caller.chat).cloned() else {
+        return "ти не підключений — напиши /start.".to_string();
+    };
+    let muted = !rec["muted"].as_bool().unwrap_or(false);
+    users["users"][&caller.chat]["muted"] = json!(muted);
+    if save_users(&users) {
+        if muted {
+            "тиха увімкнена: сигнали й розсилки тобі не приходитимуть. /хтоя — перевірити.".to_string()
+        } else {
+            "тиша вимкнена: сигнали знову приходитимуть.".to_string()
+        }
+    } else {
+        "не зміг зберегти реєстр — спробуй ще раз.".to_string()
+    }
 }
 
 /// Список підключених — адмінська команда.
@@ -1237,6 +1403,12 @@ async fn poll_once(offset: i64) -> Option<i64> {
             send_to(&chat, &part).await;
         }
     }
+    // Автодоставка нових сигналів усім підключеним. Один цикл опитування — це
+    // щонайменше 25 секунд, тож це природній такт: надто часто — шум.
+    let n = broadcast_signals_once().await;
+    if n > 0 {
+        eprintln!("[botd] розіслано сигналів: {n}");
+    }
     Some(next)
 }
 
@@ -1370,6 +1542,13 @@ mod tests {
         assert_eq!(admin_allowed, 60, "власник має мати більший ліміт");
     }
 
+    /// Тести, що торкаються СПІЛЬНОГО реєстру, мусять іти послідовно: файл один
+    /// на весь процес, і паралельні тести перетирали б один одному записи.
+    fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+        static M: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        M.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Корінь для тестів: тимчасова копія з мінімальним .env (є власник).
     fn ensure_root() {
         static ONCE: std::sync::Once = std::sync::Once::new();
@@ -1396,6 +1575,7 @@ mod tests {
 
     #[tokio::test]
     async fn many_users_connect_and_only_owner_gets_shell() {
+        let _guard = registry_lock();
         ensure_root();
 
         // Незнайомець просить /start — і підключається.
@@ -1409,7 +1589,9 @@ mod tests {
         let users = load_users();
         assert_eq!(role_of(&users, "5001", "alice"), Some(Role::Viewer));
         assert_eq!(role_of(&users, "5002", "bob"), Some(Role::Viewer));
-        assert_eq!(users_list(&users).len(), 2);
+        // Реєстр спільний для процесу, тож перевіряємо наявність, а не загальний рахунок.
+        assert!(users_list(&users).iter().any(|u| u["chat"] == "5001"));
+        assert!(users_list(&users).iter().any(|u| u["chat"] == "5002"));
 
         // Глядач не ганяє довільний shell на ВМ.
         let (_, reply) = handle_update(&msg(5001, "alice", "Alice", "!whoami")).await.unwrap();
@@ -1429,12 +1611,62 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_user_is_asked_to_start() {
+        let _guard = registry_lock();
         ensure_root();
         let (_, reply) = handle_update(&msg(6001, "stranger", "Stranger", "/стан")).await.unwrap();
         assert!(reply.contains("/start"), "відповідь: {reply}");
         // І в реєстрі його немає.
         let users = load_users();
         assert_eq!(role_of(&users, "6001", "stranger"), None);
+    }
+
+    #[tokio::test]
+    async fn muted_user_is_skipped_in_broadcast() {
+        let _guard = registry_lock();
+        ensure_root();
+        // Два підключені.
+        let _ = handle_update(&msg(7001, "ann", "Ann", "/start")).await.unwrap();
+        let _ = handle_update(&msg(7002, "bob2", "Bob", "/start")).await.unwrap();
+        assert!(broadcast_targets().contains(&"7001".to_string()));
+
+        // Один просить тишу — лишається підключеним, але розсилка йому не йде.
+        let mut users = load_users();
+        users["users"]["7001"]["muted"] = json!(true);
+        assert!(save_users(&users));
+        let targets = broadcast_targets();
+        assert!(!targets.contains(&"7001".to_string()), "заглушений не має отримувати розсилку");
+        // При цьому він лишається в реєстрі — підключення не зникло.
+        let users = load_users();
+        assert_eq!(role_of(&users, "7001", "ann"), Some(Role::Viewer));
+    }
+
+    #[tokio::test]
+    async fn first_run_does_not_flood_with_history() {
+        let _guard = registry_lock();
+        ensure_root();
+        let dir = std::env::var("APP_ROOT").unwrap();
+        std::fs::create_dir_all(format!("{dir}/dataset")).unwrap();
+        let feed = json!([
+            {"address": "0xaa", "tokens": ["AAA"], "ts": 1000},
+            {"address": "0xbb", "tokens": ["BBB"], "ts": 2000}
+        ]);
+        std::fs::write(format!("{dir}/dataset/alpha-feed.json"), feed.to_string()).unwrap();
+        let _ = std::fs::remove_file(format!("{dir}/deploy/telegram-signal-cursor.json"));
+
+        // Перший запуск: історія НЕ надсилається, лише фіксується курсор.
+        assert!(pending_signals().is_empty(), "перший запуск не має лити історію");
+        assert!(std::fs::metadata(format!("{dir}/deploy/telegram-signal-cursor.json")).is_ok());
+
+        // Новий сигнал — ось тепер має розіслатися.
+        let feed = json!([
+            {"address": "0xaa", "tokens": ["AAA"], "ts": 1000},
+            {"address": "0xbb", "tokens": ["BBB"], "ts": 2000},
+            {"address": "0xcc", "tokens": ["CCC"], "ts": 3000}
+        ]);
+        std::fs::write(format!("{dir}/dataset/alpha-feed.json"), feed.to_string()).unwrap();
+        let pending = pending_signals();
+        assert_eq!(pending.len(), 1, "лише новий сигнал");
+        assert_eq!(pending[0]["ts"].as_u64(), Some(3000));
     }
 
     #[test]
