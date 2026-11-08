@@ -43,7 +43,23 @@ pub fn enabled() -> bool {
 
 pub fn ready() -> bool {
     let c = cfg();
-    !c.token.is_empty() && !c.chat.lock().unwrap().is_empty()
+    if c.token.is_empty() {
+        return false;
+    }
+    if !c.chat.lock().unwrap().is_empty() {
+        return true;
+    }
+    // Реєстр підключених — теж «готовність»: алерти мають кому йти.
+    //
+    // І це важливіше, ніж здається: поки чат не знайдено, сервер сам опитує
+    // Telegram (getUpdates), щоб його знайти. Але тим самим токеном опитує й
+    // бот — і двоє поллерів Telegram не підтримує: один з них відкидається, і
+    // бот починає сипати «опитування не вдалось». Реєстр прибирає другу
+    // половину проблеми: якщо реєстр є, сервер не поллеритиме взагалі.
+    !load_users()["users"]
+        .as_object()
+        .map(|m| m.is_empty())
+        .unwrap_or(true)
 }
 
 /// telegram.js `telegramStatus()`
