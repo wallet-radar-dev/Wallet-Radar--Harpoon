@@ -21,6 +21,12 @@
 //!   довільний shell, запуск бінів, зміна порогів, журнал команд, керування користувачами;
 //! - `viewer` — усі інші підключені: лише читання даних і асистент.
 //!
+//! ─────────────────────────── ПРАВИЛО РОЗСИЛКИ ───────────────────────────
+//! Повідомлення користувача — це ЙОГО особиста справа: відповідь і сповіщення
+//! йдуть тільки до нього. Жодне повідомлення (навіть тестове) не спричиняє
+//! сповіщень для інших підключених. Автодоставка нових сигналів живе окремим
+//! циклом і має КУРСОР НА КОЖНОГО, тож черга кожного — своя.
+//!
 //! Реєстр підключених — `deploy/telegram-users.json`, тож підключення переживає
 //! перезапуск демона. Незнайомому чату бот відповідає «напиши /start» і нічого не
 //! виконує; спроба без реєстрації пишеться в журнал — мовчки ігнорувати спробу гірше,
@@ -52,6 +58,10 @@ const POLL_SECS: u64 = 25;
 
 /// Ліміт Telegram на одне повідомлення — 4096. Ріжемо з запасом на розмітку.
 const TG_LIMIT: usize = 3900;
+
+/// Такт автодоставки сигналів. Окремий від опитування Telegram: жодне
+/// повідомлення користувача не має спричиняти сповіщення для інших.
+const SIGNAL_SECS: u64 = 60;
 
 /// Що дозволено запускати командою `/запусти`. Довільний бінарник сюди не потрапляє —
 /// для цього є `!`, і хай це буде свідомим вибором, а не одруком у назві.
@@ -347,23 +357,36 @@ async fn broadcast(text: &str) -> (usize, usize) {
     (ok, err)
 }
 
-/// Курсор авторозсилки сигналів: до якого `ts` ми вже відправили.
-fn signal_cursor_path() -> String {
-    format!("{}/deploy/telegram-signal-cursor.json", cfg().root)
+/// Курсори автодоставки сигналів — ПО ОДНОМУ НА КОРИСТУВАЧА.
+///
+/// Глобальний курсор був неправильним: активність одного користувача (будь-яке
+/// повідомлення) запускала розсилку й просувала чергу для всіх одразу. Тепер
+/// кожен має свій курсор і отримує саме ті сигнали, яких ще не бачив.
+fn signal_cursors_path() -> String {
+    format!("{}/deploy/telegram-signal-cursors.json", cfg().root)
 }
 
-/// Читає курсор. Якщо файлу немає — повертає «ще нічого не надсилали» (0), і тоді
-/// pending_signals() ініціалізує курсор по найновішому сигналу: інакше перший же
-/// запуск ботa заливить усіх сторима історією.
-fn load_signal_cursor() -> u64 {
-    read_json(&signal_cursor_path())
-        .and_then(|v| v["ts"].as_u64())
-        .unwrap_or(0)
+fn load_cursors() -> Value {
+    let mut v = read_json(&signal_cursors_path()).unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    v
 }
 
-fn save_signal_cursor(ts: u64) {
-    let path = signal_cursor_path();
-    let _ = std::fs::write(path, format!("{{\"ts\":{ts}}}"));
+/// Атомарний запис курсорів: файл малий, але він — «памʼять» того, хто що бачив.
+fn save_cursors(v: &Value) -> bool {
+    let path = signal_cursors_path();
+    let tmp = format!("{path}.tmp.{}", std::process::id());
+    let Ok(body) = serde_json::to_string_pretty(v) else { return false };
+    if std::fs::write(&tmp, body).is_err() {
+        return false;
+    }
+    let ok = std::fs::rename(&tmp, &path).is_ok();
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    ok
 }
 
 /// Спільне місце — реєстр на сервері.
@@ -416,8 +439,8 @@ async fn registry_sync_loop() {
     }
 }
 
-/// Сигнали, які ще не розіслано.
-fn pending_signals() -> Vec<Value> {
+/// Сигнали стрічки, відсортовані за часом.
+fn feed_items() -> Vec<Value> {
     let r = &cfg().root;
     let Some(feed) = read_json(&format!("{r}/dataset/alpha-feed.json")) else {
         return vec![];
@@ -425,20 +448,30 @@ fn pending_signals() -> Vec<Value> {
     let empty = vec![];
     let mut items: Vec<Value> = feed.as_array().unwrap_or(&empty).clone();
     items.sort_by_key(|i| i["ts"].as_u64().unwrap_or(0));
-    let cursor = load_signal_cursor();
-    let mut pending: Vec<Value> = items
-        .into_iter()
-        .filter(|i| i["ts"].as_u64().unwrap_or(0) > cursor)
-        .collect();
+    items
+}
+
+/// Що надіслати користувачеві, у якого курсор `cursor`.
+///
+/// Повертає (новий курсор, сигнали до надсилання). Курсор `0` — це «цей
+/// користувач ще нічого не отримував»: тоді стартуємо від найновішого сигналу
+/// й нічого не шлемо, інакше перше ж доставлення залило б його історією.
+fn signals_for(items: &[Value], cursor: u64) -> (u64, Vec<Value>) {
+    let newest = items.last().map(|i| i["ts"].as_u64().unwrap_or(0)).unwrap_or(0);
     if cursor == 0 {
-        // Перший запуск: не заливаємо історією — стартуємо від найновішого.
-        if let Some(last) = pending.last() {
-            let ts = last["ts"].as_u64().unwrap_or(0);
-            save_signal_cursor(ts);
-            pending.clear();
-        }
+        return (newest, vec![]);
     }
-    pending
+    let pending: Vec<Value> = items
+        .iter()
+        .filter(|i| i["ts"].as_u64().unwrap_or(0) > cursor)
+        .cloned()
+        .collect();
+    let upto: Vec<Value> = pending.into_iter().take(10).collect();
+    let new_cursor = upto
+        .last()
+        .map(|i| i["ts"].as_u64().unwrap_or(0))
+        .unwrap_or(cursor);
+    (new_cursor, upto)
 }
 
 /// Формат одного сигналу для розсилки.
@@ -457,29 +490,69 @@ fn signal_text(it: &Value) -> String {
     )
 }
 
-/// Автодоставка нових сигналів усім підключеним. Повертає кількість розісланих.
+/// Авто-доставка нових сигналів — КОЖНОМУ користувачеві те, чого він ще не бачив.
+///
+/// Повертає кількість надісланих повідомлень. Користувачі з тишею не отримують
+/// нічого; для інших сигнал не дублюється.
 async fn broadcast_signals_once() -> usize {
-    let pending = pending_signals();
-    if pending.is_empty() {
+    let items = feed_items();
+    if items.is_empty() {
         return 0;
     }
-    let targets = broadcast_targets();
-    if targets.is_empty() {
-        return 0;
-    }
+    let users = load_users();
+    let mut cursors = load_cursors();
     let mut sent = 0usize;
-    for it in pending.into_iter().take(10) {
-        let ts = it["ts"].as_u64().unwrap_or(0);
-        let text = format!("{}\n\n{}", signal_text(&it), "Дані проєкту Wallet Radar · /сигнали — історія");
-        let (ok, _err) = broadcast(&text).await;
-        if ok == 0 {
-            // Нікому не дійшло — не рухаємо курсор, спробуємо наступного разу.
-            break;
+    let mut changed = false;
+    for u in users_list(&users) {
+        let chat = u["chat"].as_str().unwrap_or("").to_string();
+        if chat.is_empty() || u["muted"].as_bool().unwrap_or(false) {
+            continue;
         }
-        save_signal_cursor(ts);
-        sent += 1;
+        let cursor = cursors.get(&chat).and_then(|v| v.as_u64()).unwrap_or(0);
+        let (new_cursor, pending) = signals_for(&items, cursor);
+        if cursor == 0 {
+            // Перший контакт: курсор стає найновішим сигналом, історію не лишемо.
+            cursors[&chat] = json!(new_cursor);
+            changed = true;
+            continue;
+        }
+        for it in pending {
+            let ts = it["ts"].as_u64().unwrap_or(0);
+            let text = format!(
+                "{}\n\n{}",
+                signal_text(&it),
+                "Дані проєкту Wallet Radar · /сигнали — історія"
+            );
+            if !send_to(&chat, &text).await {
+                // Нікому не дійшло — не рухаємо курсор, спробуємо наступного разу.
+                break;
+            }
+            cursors[&chat] = json!(ts);
+            changed = true;
+            sent += 1;
+        }
+    }
+    // Курсори зберігаємо, навіть якщо нічого не надіслано: «перший контакт»
+    // теж рухає курсор, і без цього авто-доставка не почалася б узагалі.
+    if changed {
+        let _ = save_cursors(&cursors);
     }
     sent
+}
+
+/// Окремий цикл автодоставки — НЕ від запиту користувача.
+///
+/// Раніше розсилка запускалася з обробки будь-якого повідомлення: тож тестове
+/// повідомлення одного користувача спричиняло сповіщення в усіх інших. Тепер
+/// автодоставка живе окремо: ніхто своїм повідомленням нікого не «розбуджує».
+async fn signal_broadcast_loop() {
+    loop {
+        let n = broadcast_signals_once().await;
+        if n > 0 {
+            eprintln!("[botd] розіслано сигналів: {n}");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(SIGNAL_SECS)).await;
+    }
 }
 
 /// Скільки команд на хвилину дозволено одному чату.
@@ -513,6 +586,18 @@ fn rate_ok(chat: &str, role: Role) -> bool {
 /// Відмова за роллю. Каже ЩО саме закрите — інакше користувач думає, що бот зламаний.
 fn denied(what: &str) -> String {
     format!("{what} — лише для власника бота.")
+}
+
+/// Відмова, що відповідає на запит про нашу внутрішню базу гаманців.
+///
+/// Тут важлива не сама відмова, а те, що вона не пропонує обхід: глядач не має
+/// жодного шляху дістати склад груп чи дані про адреси — ні командою, ні
+/// асистентом, ні через модель з інструментами.
+fn denied_data(what: &str) -> String {
+    format!(
+        "{what} — це внутрішня база проєкту, глядачам вона недоступна. \
+         Доступні лише транзакції та сигнали: /сигнали"
+    )
 }
 
 /// Розбір команди: перше слово — команда, решта — аргументи.
@@ -565,9 +650,14 @@ async fn handle(text: &str, caller: &Caller) -> String {
         "/start" => greet(caller.role),
         "/help" | "/довідка" | "/допомога" => help(caller.role),
         "/стан" | "/status" => status(),
-        "/гаманець" | "/wallet" => wallet(&rest),
+        // Наша база гаманців — власна внутрішня база проєкту. Глядач її не бачить.
+        "/гаманець" | "/wallet" => {
+            if is_admin { wallet(&rest) } else { denied_data("дані про гаманця") }
+        }
         "/токен" | "/token" => token_info(&rest),
-        "/група" | "/group" => group(&rest),
+        "/група" | "/group" => {
+            if is_admin { group(&rest) } else { denied_data("склад груп капіталу") }
+        }
         "/сигнали" | "/signals" => signals(&rest),
         "/запусти" | "/run" => {
             if is_admin { run_bin(&rest).await } else { denied("запуск службових бінів") }
@@ -607,15 +697,29 @@ async fn handle(text: &str, caller: &Caller) -> String {
 fn greet(role: Role) -> String {
     let extra = match role {
         Role::Admin => "\nТи — власник: доступні довільні команди, запуск бінів і керування користувачами.",
-        Role::Viewer => "\nТи підключений як глядач: дані проєкту, асистент і монітори.",
+        Role::Viewer => "\nТи підключений як глядач: транзакції, сигнали, ринок і стан моніторів.",
     };
     format!("<b>Wallet Radar — бот</b>\nПідключено.{extra}\n\n{}", help(role))
 }
 
-/// Довідка. Для глядача приховуємо привілейовані команди — щоб не було спокуси
-/// натискати те, що все одно відхилиться.
+/// Довідка. Для глядача приховуємо і привілейовані команди, і ті, що читають
+/// нашу внутрішню базу гаманців — щоб не було спокуси натискати те, що все одно
+/// відхилиться.
 fn help(role: Role) -> String {
-    let base = "<b>Wallet Radar — бот</b>\n\n\
+    if role != Role::Admin {
+        return "<b>Wallet Radar — бот</b>\n\n\
+     <b>Дані</b>\n\
+     /токен ONDO — ціна, ліквідність, обіг, капіталізація\n\
+     /сигнали [N] — останні сигнали проєкту (за замовчуванням 5)\n\
+     /стан — коли востаннє відпрацював кожен монітор\n\
+     /діагностика — перевірка всіх ланок відповіді\n\
+     /хтоя — мій чат, роль і ліміт\n\n\
+     <b>Питання</b>\n\
+     Напиши питання без слеша — відповім по ринку, моніторах і сигналах.\n\n\
+     /тиша — не присилати тобі сигнали й розсилки (лишаєшся підключеним)\n\n\
+     Внутрішня база гаманців глядачам недоступна.".to_string();
+    }
+    "<b>Wallet Radar — бот</b>\n\n\
      <b>Дані</b>\n\
      /гаманець 0x… — роль, баланс, мітка, активність\n\
      /токен ONDO — ціна, ліквідність, обіг, капіталізація\n\
@@ -627,11 +731,7 @@ fn help(role: Role) -> String {
      <b>Питання</b>\n\
      Напиши питання без слеша — піде в асистента, а якщо той\n\
      не впізнає, відповість локальна модель (буде позначено).\n\n\
-     /тиша — не присилати тобі сигнали й розсилки (лишаєшся підключеним)";
-    if role != Role::Admin {
-        return format!("{base}\n\nДані проєкту спільні для всіх підключених.");
-    }
-    format!("{base}\n\n\
+     /тиша — не присилати тобі сигнали й розсилки (лишаєшся підключеним)\n\n\
      <b>Дії (лише власник)</b>\n\
      /рассылка <текст> — розіслати повідомлення всім підключеним\n\
      /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
@@ -644,7 +744,7 @@ fn help(role: Role) -> String {
      /права &lt;chat_id&gt; — зробити адміном\n\
      /в правах &lt;chat_id&gt; — забрати адміна\n\
      /відключити &lt;chat_id&gt; — від'єднати\n\n\
-     Запускати можна: cexsignal, campwatch, wakeup, tokprices, tokliq, relay-monitor")
+     Запускати можна: cexsignal, campwatch, wakeup, tokprices, tokliq, relay-monitor".to_string()
 }
 
 /// Хто я: чат, роль, ліміт. Необхідно, коли бот уже під'єднаний до десятка людей —
@@ -1050,8 +1150,10 @@ async fn diag(caller: &Caller) -> String {
     out.push_str(&format!("модель: {}\n", esc(&c.model)));
     out.push_str(&format!("зсув Telegram: {}\n\n", load_offset()));
 
-    // асистент — від твоєї ролі, бо саме так він викликається в роботі
-    let url = format!("http://127.0.0.1:{}/api/ask?q=%D1%82%D0%B5%D1%81%D1%82", c.port);
+    // асистент — від твоєї ролі, бо саме так він викликається в роботі.
+    // Адреса сервера — не завжди localhost (на Windows-машині сервер на ноутбуку),
+    // тож беремо її з API_HOST, як в решті місць.
+    let url = format!("http://{}:{}/api/ask?q=%D1%82%D0%B5%D1%81%D1%82", c.api_host, c.port);
     let (login, pass) = api_creds(caller.role);
     let a = match http().get(&url).basic_auth(login, Some(pass)).send().await {
         Ok(r) if r.status().is_success() => "✅ відповідає".to_string(),
@@ -1082,7 +1184,7 @@ async fn diag(caller: &Caller) -> String {
     out.push_str(&format!("Ollama: {}\n", esc(&o)));
 
     // інструменти на живих даних
-    let t = tool_exec("monitors_status", &json!({}));
+    let t = tool_exec("monitors_status", &json!({}), caller.role);
     out.push_str(&format!("інструменти: {}\n", if t.contains("МОНІТОР") { "✅ читають дані" } else { "⚠️ порожньо" }));
 
     let log = format!("{}/deploy/bot-commands.log", c.root);
@@ -1214,19 +1316,27 @@ fn api_creds(role: Role) -> (&'static str, &'static str) {
 }
 
 async fn ask(q: &str, role: Role) -> String {
-    // 1. Детермінований асистент — відповідає з даних і не вигадує чисел.
-    if let Some(a) = ask_assistant(q, role).await { return a; }
-    // 2. Модель З ДОСТУПОМ ДО ДАНИХ: сама вирішує, що подивитись, ми виконуємо.
-    if let Some(a) = ask_ollama_tools(q).await { return a; }
-    // 3. Те саме, але БЕЗ моделі: питання про конкретний гаманець, токен, групу,
-    //    монітори чи сигнали читається з тих самих файлів, які бот уже читає для
-    //    команд. Нічого не вигадує — усе просто з даних.
-    if let Some(a) = ask_local(q) { return a; }
-    // 4. Модель без даних — останній засіб, і він чесно помічений.
-    match ask_ollama(q).await {
-        Some(a) => format!("{}\n\n<i>⚠️ модель відповідала БЕЗ доступу до даних проєкту — числа з неї не бери</i>", esc(&a)),
-        None => "не зрозумів питання, і модель не відповіла. /довідка — що я вмію".to_string(),
+    if role == Role::Admin {
+        // 1. Детермінований асистент сервера — лише власнику: він уміє піднімати
+        //    дані про наші групи й гаманці, а це внутрішня база проєкту.
+        if let Some(a) = ask_assistant(q, role).await { return a; }
+        // 2. Модель З ДОСТУПОМ ДО ДАНИХ: сама вирішує, що подивитись, ми виконуємо.
+        if let Some(a) = ask_ollama_tools(q, role).await { return a; }
+        // 3. Те саме, але БЕЗ моделі: питання про конкретний гаманець, токен, групу,
+        //    монітори чи сигнали читається з тих самих файлів, які бот уже читає.
+        if let Some(a) = ask_local(q, role) { return a; }
+        // 4. Модель без даних — останній засіб, і він чесно помічений.
+        return match ask_ollama(q).await {
+            Some(a) => format!("{}\n\n<i>⚠️ модель відповідала БЕЗ доступу до даних проєкту — числа з неї не бери</i>", esc(&a)),
+            None => "не зрозумів питання, і модель не відповіла. /довідка — що я вмію".to_string(),
+        };
     }
+
+    // Глядач: тільки транзакції (сигнали/алерти), ринок і стан моніторів.
+    // Жодного доступу до нашої бази гаманців — ні через команди, ні через асистента,
+    // ні через «розумну» модель, яка сама спитала б інструмент.
+    if let Some(a) = ask_local(q, role) { return a; }
+    "На питання про нашу базу гаманців я не відповідаю: глядачам доступні лише транзакції та сигнали (/сигнали). Запитайте власника.".to_string()
 }
 
 /// Питання без асистента й без моделі — читається з локальних даних.
@@ -1236,31 +1346,35 @@ async fn ask(q: &str, role: Role) -> String {
 /// читає для команд `/гаманець`, `/токен`, `/група`, `/стан`, `/сигнали`.
 /// Тому навіть без `/api/ask` і без локальної моделі бот лишається корисним,
 /// а не відповідає «не зрозумів питання» наохочу.
-fn ask_local(q: &str) -> Option<String> {
+fn ask_local(q: &str, role: Role) -> Option<String> {
     let raw = q.trim();
     if raw.is_empty() { return None; }
     let low = raw.to_lowercase();
 
-    // гаманець — за повною адресою
-    if let Some(addr) = find_address(raw) {
-        return Some(strip_tags(&wallet(&addr)));
+    // гаманець — за повною адресою: це наша внутрішня база, лише власнику.
+    if role == Role::Admin {
+        if let Some(addr) = find_address(raw) {
+            return Some(strip_tags(&wallet(&addr)));
+        }
     }
 
-    // токен — за символом у ВЕРХНЬОМУ регістрі (ONDO, ENA, WBTC)
+    // токен — ринкові дані, вони публічні й нічого про наші гаманці не кажуть.
     if let Some(sym) = find_ticker(raw) {
         if let Some(ans) = token_found(&sym) {
             return Some(strip_tags(&ans));
         }
     }
 
-    // речі, які просто перелічуються з даних
-    if has_word(&low, &["групи", "група", "груп"]) {
+    // групи капіталу — це склад НАШИХ гаманців: лише власник.
+    if role == Role::Admin && has_word(&low, &["групи", "група", "груп"]) {
         return Some(strip_tags(&group("")));
     }
+    // монітори — стан роботи, без нашої бази.
     if has_word(&low, &["монітор", "монітори", "стан", "працює", "живі", "застряг"]) {
         return Some(strip_tags(&status()));
     }
-    if has_word(&low, &["сигнал", "сигнали", "алерт"]) {
+    // сигнали — транзакції: ось що глядач має бачити.
+    if has_word(&low, &["сигнал", "сигнали", "алерт", "транзакц"]) {
         return Some(strip_tags(&signals("5")));
     }
     None
@@ -1336,7 +1450,8 @@ fn strip_tags(s: &str) -> String {
 /// Інструменти, які модель може викликати. Опис кожного написаний для НЕЇ, а не для
 /// людини: від того, наскільки точно тут сказано «коли це доречно», залежить, чи
 /// покличе вона потрібну функцію замість того, щоб вигадати відповідь.
-fn tool_defs() -> Value {
+/// Повний набір інструментів — тільки для власника.
+fn all_tool_defs() -> Value {
     json!([
       {"type": "function", "function": {
         "name": "wallet_info",
@@ -1373,10 +1488,32 @@ fn tool_defs() -> Value {
     ])
 }
 
+/// Інструменти, доступні моделі. Для глядача — БЕЗ тих, що читають нашу базу
+/// гаманців: ролі, баланси, групи, пошук за мітками.
+fn tool_defs(role: Role) -> Value {
+    if role == Role::Admin {
+        return all_tool_defs();
+    }
+    let arr = all_tool_defs().as_array().cloned().unwrap_or_default();
+    Value::Array(
+        arr.into_iter()
+            .filter(|t| {
+                let n = t["function"]["name"].as_str().unwrap_or("");
+                !matches!(n, "wallet_info" | "group_info" | "find_by_label")
+            })
+            .collect(),
+    )
+}
+
 /// Виконання інструмента. Повертає ПЛОСКИЙ текст — те саме, що побачив би користувач,
 /// лише без розмітки.
-fn tool_exec(name: &str, args: &Value) -> String {
+fn tool_exec(name: &str, args: &Value, role: Role) -> String {
     let s = |k: &str| args[k].as_str().unwrap_or("").to_string();
+    // Глядач не дістає нашу базу гаманців — навіть якщо модель сама попросила
+    // такий інструмент. Обмеження на рівні інструмента, а не лише на рівні списку.
+    if role != Role::Admin && matches!(name, "wallet_info" | "group_info" | "find_by_label") {
+        return "інструмент доступний лише власнику".to_string();
+    }
     match name {
         "wallet_info" => strip_tags(&wallet(&s("address"))),
         "token_info" => strip_tags(&token_info(&s("symbol"))),
@@ -1428,7 +1565,7 @@ fn cex_flows() -> String {
 
 /// Один виклик Ollama в режимі діалогу (`/api/chat`) — саме він, а не `/api/generate`,
 /// уміє інструменти.
-async fn ollama_chat(messages: &[Value], with_tools: bool) -> Option<Value> {
+async fn ollama_chat(messages: &[Value], with_tools: bool, role: Role) -> Option<Value> {
     let mut body = json!({
         "model": cfg().model,
         "messages": messages,
@@ -1436,7 +1573,7 @@ async fn ollama_chat(messages: &[Value], with_tools: bool) -> Option<Value> {
         // нижча температура: нам потрібні факти з інструментів, а не творчість
         "options": {"temperature": 0.2},
     });
-    if with_tools { body["tools"] = tool_defs(); }
+    if with_tools { body["tools"] = tool_defs(role); }
     let r = http().post("http://127.0.0.1:11434/api/chat").json(&body).send().await.ok()?;
     if !r.status().is_success() {
         eprintln!("[botd] ollama /api/chat: HTTP {}", r.status().as_u16());
@@ -1450,7 +1587,7 @@ async fn ollama_chat(messages: &[Value], with_tools: bool) -> Option<Value> {
 ///
 /// Обмеження в 4 кола навмисне: без нього модель, яка не може відповісти, ходить по
 /// інструментах нескінченно. Краще чесно сказати, що не вийшло, ніж мовчати хвилинами.
-async fn ask_ollama_tools(q: &str) -> Option<String> {
+async fn ask_ollama_tools(q: &str, role: Role) -> Option<String> {
     let system = "Ти помічник у системі аналізу гаманців Ethereum «Wallet Radar».
 ГОЛОВНЕ ПРАВИЛО: усі факти й числа бери ВИКЛЮЧНО з інструментів. Якщо для відповіді
 потрібні дані — виклич інструмент. Ніколи не вигадуй адрес, сум, цін і дат.
@@ -1464,7 +1601,7 @@ async fn ask_ollama_tools(q: &str) -> Option<String> {
     let mut used: Vec<String> = Vec::new();
 
     for _round in 0..4 {
-        let msg = ollama_chat(&messages, true).await?;
+        let msg = ollama_chat(&messages, true, role).await?;
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         if calls.is_empty() {
             let content = msg["content"].as_str().unwrap_or("").trim().to_string();
@@ -1480,14 +1617,14 @@ async fn ask_ollama_tools(q: &str) -> Option<String> {
         for c in calls {
             let name = c["function"]["name"].as_str().unwrap_or("").to_string();
             let args = c["function"]["arguments"].clone();
-            let result = tool_exec(&name, &args);
+            let result = tool_exec(&name, &args, role);
             eprintln!("[botd] інструмент {name}({args}) → {} символів", result.len());
             used.push(name.clone());
             messages.push(json!({"role": "tool", "name": name, "content": result}));
         }
     }
     // Витратили всі кола на інструменти — просимо підсумувати вже без них
-    let msg = ollama_chat(&messages, false).await?;
+    let msg = ollama_chat(&messages, false, role).await?;
     let content = msg["content"].as_str().unwrap_or("").trim().to_string();
     if content.is_empty() { return None; }
     Some(format!("{}\n\n<i>дані з: {}</i>", esc(&content), esc(&used.join(", "))))
@@ -1672,12 +1809,10 @@ async fn poll_once(offset: i64) -> Option<i64> {
             send_to(&chat, &part).await;
         }
     }
-    // Автодоставка нових сигналів усім підключеним. Один цикл опитування — це
-    // щонайменше 25 секунд, тож це природній такт: надто часто — шум.
-    let n = broadcast_signals_once().await;
-    if n > 0 {
-        eprintln!("[botd] розіслано сигналів: {n}");
-    }
+    // Тут НІКОЛИ не розсилається нічого іншим: повідомлення користувача —
+    // це його особиста справа, відповідь іде тільки йому. Автодоставка
+    // сигналів живе окремим циклом (signal_broadcast_loop), щоб тестове
+    // повідомлення не «розбуджувало» решту.
     Some(next)
 }
 
@@ -1704,6 +1839,10 @@ async fn main() {
     // Реєстр живе у спільному місці — на сервері. Синхронізація окремим циклом,
     // щоб не залежала від того, чи вдалося опитування Telegram.
     tokio::spawn(registry_sync_loop());
+
+    // Автодоставка сигналів — окремим циклом, щоб не привʼязуватися до
+    // повідомлень: користувач пише — і лише йому відповідають.
+    tokio::spawn(signal_broadcast_loop());
 
     let mut offset = load_offset();
     let mut fails = 0u32;
@@ -1913,8 +2052,8 @@ mod tests {
         assert_eq!(role_of(&users, "7001", "ann"), Some(Role::Viewer));
     }
 
-    #[tokio::test]
-    async fn first_run_does_not_flood_with_history() {
+    #[test]
+    fn first_run_does_not_flood_with_history() {
         let _guard = registry_lock();
         ensure_root();
         let dir = std::env::var("APP_ROOT").unwrap();
@@ -1924,22 +2063,59 @@ mod tests {
             {"address": "0xbb", "tokens": ["BBB"], "ts": 2000}
         ]);
         std::fs::write(format!("{dir}/dataset/alpha-feed.json"), feed.to_string()).unwrap();
-        let _ = std::fs::remove_file(format!("{dir}/deploy/telegram-signal-cursor.json"));
+        let items = feed_items();
 
-        // Перший запуск: історія НЕ надсилається, лише фіксується курсор.
-        assert!(pending_signals().is_empty(), "перший запуск не має лити історію");
-        assert!(std::fs::metadata(format!("{dir}/deploy/telegram-signal-cursor.json")).is_ok());
+        // Перший контакт: історія НЕ надсилається, лише фіксується курсор.
+        let (cursor, pending) = signals_for(&items, 0);
+        assert!(pending.is_empty(), "перший запуск не має лити історію");
+        assert_eq!(cursor, 2000, "курсор стає найновішим сигналом");
 
-        // Новий сигнал — ось тепер має розіслатися.
+        // Новий сигнал — ось тепер має дійти.
         let feed = json!([
             {"address": "0xaa", "tokens": ["AAA"], "ts": 1000},
             {"address": "0xbb", "tokens": ["BBB"], "ts": 2000},
             {"address": "0xcc", "tokens": ["CCC"], "ts": 3000}
         ]);
         std::fs::write(format!("{dir}/dataset/alpha-feed.json"), feed.to_string()).unwrap();
-        let pending = pending_signals();
+        let items = feed_items();
+        let (cursor, pending) = signals_for(&items, 2000);
         assert_eq!(pending.len(), 1, "лише новий сигнал");
         assert_eq!(pending[0]["ts"].as_u64(), Some(3000));
+        assert_eq!(cursor, 3000);
+    }
+
+    #[test]
+    fn every_user_has_own_cursor() {
+        // Черга кожного — своя: активність одного не просуває курсор інших.
+        let items = vec![
+            json!({"address": "0xaa", "tokens": ["AAA"], "ts": 1000}),
+            json!({"address": "0xbb", "tokens": ["BBB"], "ts": 2000}),
+            json!({"address": "0xcc", "tokens": ["CCC"], "ts": 3000}),
+        ];
+        // «А» бачив усе до 2000, «Б» — тільки до 1000.
+        let (_ca, pa) = signals_for(&items, 2000);
+        let (_cb, pb) = signals_for(&items, 1000);
+        assert_eq!(pa.len(), 1);
+        assert_eq!(pa[0]["ts"].as_u64(), Some(3000));
+        assert_eq!(pb.len(), 2, "«Б» отримує і те, що «А» вже бачив");
+        assert_eq!(pb[0]["ts"].as_u64(), Some(2000));
+
+        // Новий користувач (курсор 0) не отримує нічого — історію не литимо.
+        let (_cc, pc) = signals_for(&items, 0);
+        assert!(pc.is_empty());
+    }
+
+    #[test]
+    fn one_signal_is_not_delivered_twice() {
+        let items = vec![
+            json!({"address": "0xaa", "tokens": ["AAA"], "ts": 1000}),
+            json!({"address": "0xbb", "tokens": ["BBB"], "ts": 2000}),
+        ];
+        let (cursor, pending) = signals_for(&items, 1000);
+        assert_eq!(pending.len(), 1);
+        // Наступного разу той самий сигнал уже не дублюється.
+        let (_cursor2, pending2) = signals_for(&items, cursor);
+        assert!(pending2.is_empty());
     }
 
     #[test]
@@ -2005,9 +2181,68 @@ mod tests {
                   "\u{0445}\u{0442}\u{043e} \u{0442}\u{0430}\u{043a}\u{0438}\u{0439} 0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c",
                   "\u{044f}\u{043a}\u{0456} \u{0454} \u{0433}\u{0440}\u{0443}\u{043f}\u{0438} \u{0454}",
                   "\u{044f}\u{043a}\u{0456} \u{0441}\u{0442}\u{0430}\u{043d} \u{043c}\u{043e}\u{043d}\u{0456}\u{0442}\u{043e}\u{0440}\u{0456}\u{0432}"] {
-            let a = ask_local(q);
+            let a = ask_local(q, Role::Admin);
             println!("Q={q:?} -> {}", a.as_deref().unwrap_or("<none>").chars().take(90).collect::<String>());
             assert!(a.is_some(), "no local answer for {q:?}");
         }
+    }
+
+    // ───────────────── ролі: глядач не бачить нашу базу гаманців ─────────────────
+
+    #[test]
+    fn viewer_tool_list_excludes_our_base() {
+        let names: Vec<String> = tool_defs(Role::Viewer).as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|f| f["function"]["name"].as_str().unwrap_or("").to_string())
+            .collect();
+        for closed in ["wallet_info", "group_info", "find_by_label"] {
+            assert!(!names.iter().any(|n| n == closed), "{closed} мусить бути закритий для глядача");
+        }
+        // а от ринкове й монітори лишаються
+        for open in ["token_info", "monitors_status", "cex_flows"] {
+            assert!(names.iter().any(|n| n == open), "{open} має лишатися глядачеві");
+        }
+        // власнику — увесь набір
+        assert_eq!(tool_defs(Role::Admin).as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn viewer_cannot_execute_our_base_tools() {
+        // навіть якщо модель сама попросила закритий інструмент
+        let r = tool_exec("wallet_info", &json!({"address": "0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c"}), Role::Viewer);
+        assert!(r.contains("лише власнику"), "wallet_info для глядача: {r}");
+        let r = tool_exec("group_info", &json!({"name": ""}), Role::Viewer);
+        assert!(r.contains("лише власнику"), "group_info для глядача: {r}");
+        let r = tool_exec("find_by_label", &json!({"query": "binance"}), Role::Viewer);
+        assert!(r.contains("лише власнику"), "find_by_label для глядача: {r}");
+    }
+
+    #[test]
+    fn viewer_gets_no_wallet_or_group_data_in_answers() {
+        // питання про гаманця: глядач не отримує картку гаманця
+        let addr = "0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c";
+        assert!(ask_local(&format!("хто такий {addr}"), Role::Viewer).is_none(),
+            "глядач не мав отримати дані про гаманця");
+        // питання про групи: теж ні
+        assert!(ask_local("які є групи", Role::Viewer).is_none(),
+            "глядач не мав отримати склад груп");
+        // а власник — отримує
+        assert!(ask_local(&format!("хто такий {addr}"), Role::Admin).is_some());
+    }
+
+    #[test]
+    fn viewer_still_gets_market_and_signals() {
+        // глядач мусить лишатись корисним: ринок, монітори, сигнали — можна
+        let s = ask_local("останні сигнали", Role::Viewer);
+        assert!(s.is_some(), "глядач мав отримати сигнали");
+    }
+
+    #[test]
+    fn denial_message_names_what_is_closed() {
+        let d = denied_data("дані про гаманця");
+        assert!(d.contains("внутрішня база"));
+        assert!(d.contains("/сигнали"), "відмова має показати доступну заміну");
     }
 }
