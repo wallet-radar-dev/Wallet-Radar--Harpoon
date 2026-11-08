@@ -11,7 +11,7 @@
 //! сервера.
 //!
 //! ─────────────────────────── ДОСТУП ───────────────────────────
-//! Бот багатокористувацький: підключитися може кожен, хто наді��лає `/start`, і дані
+//! Бот багатокористувацький: підключитися може кожен, хто надіслає `/start`, і дані
 //! проєкту (гаманці, токени, групи, монітори) бачать усі підключені.
 //!
 //! Але «доступ до даних» і «доступ до машини» — різні речі. Бот виконує команди на ВМ,
@@ -515,6 +515,29 @@ fn denied(what: &str) -> String {
     format!("{what} — лише для власника бота.")
 }
 
+/// Розбір команди: перше слово — команда, решта — аргументи.
+///
+/// Окремий випадок — «/в правах <chat_id>»: у назві команди є пробіл, тож наївно
+/// розбір віддає «/в» і «правах …», а назва з пробілом ніколи не збігається —
+/// команда мовчки тонула у запиті до асистента. Тут це розбирається явно.
+fn parse_cmd(t: &str) -> (String, String) {
+    let t = t.trim();
+    let (head, rest) = match t.split_once(char::is_whitespace) {
+        Some((h, r)) => (h.to_lowercase(), r.trim().to_string()),
+        None => (t.to_lowercase(), String::new()),
+    };
+    if head == "/в" {
+        let lower = rest.to_lowercase();
+        if lower.starts_with("правах") {
+            // skip(6) — саме символи, а не байти: «ПРАВАХ» у кодуванні UTF-8 це
+            // 12 байт, і зрізання по байтах могло б розрубати символ.
+            let tail = rest.chars().skip(6).collect::<String>().trim().to_string();
+            return ("/в правах".to_string(), tail);
+        }
+    }
+    (head, rest)
+}
+
 /// Розклад команд за ролями.
 ///
 /// `admin` — власник: усе, включно з довільним shell на ВМ.
@@ -535,10 +558,7 @@ async fn handle(text: &str, caller: &Caller) -> String {
         return run_shell(cmd.trim()).await;
     }
 
-    let (head, rest) = match t.split_once(char::is_whitespace) {
-        Some((h, r)) => (h.to_lowercase(), r.trim().to_string()),
-        None => (t.to_lowercase(), String::new()),
-    };
+    let (head, rest) = parse_cmd(t);
     let is_admin = caller.role == Role::Admin;
 
     match head.as_str() {
@@ -576,7 +596,7 @@ async fn handle(text: &str, caller: &Caller) -> String {
         "/права" | "/promote" => {
             if is_admin { role_cmd(&rest, true).await } else { denied("зміна прав") }
         }
-        "/в правах" | "/demote" => {
+        "/в правах" | "/вправах" | "/demote" => {
             if is_admin { role_cmd(&rest, false).await } else { denied("зміна прав") }
         }
         _ => ask(t, caller.role).await,
@@ -614,7 +634,6 @@ fn help(role: Role) -> String {
     format!("{base}\n\n\
      <b>Дії (лише власник)</b>\n\
      /рассылка <текст> — розіслати повідомлення всім підключеним\n\
-     /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
      /запусти cexsignal MULT=2 — запустити бін із параметрами\n\
      /поріг — показати збережені параметри\n\
      /поріг cexsignal MIN_USD=500000 — змінити й запам'ятати\n\
@@ -851,38 +870,127 @@ fn token_info(arg: &str) -> String {
     out
 }
 
-fn group(arg: &str) -> String {
-    let id = arg.trim().to_lowercase();
-    let r = &cfg().root;
-    let path = format!("{r}/dataset/capital-groups/wallets.json");
-    let Some(v) = read_json(&path) else { return format!("нема {}", esc(&path)) };
-    let Some(obj) = v.as_object() else { return "несподіваний формат wallets.json".to_string() };
+/// Одна група капіталу в нормалізованому вигляді.
+struct Grp {
+    /// Ідентифікатор, за яким групу шукають: «/група 3».
+    id: String,
+    /// Людська назва: спільні активи групи або її стара назва.
+    label: String,
+    /// Адреси учасників.
+    members: Vec<String>,
+}
 
-    if id.is_empty() {
-        let mut out = String::from("<b>Групи капіталу</b>\n");
-        let mut rows: Vec<(String, usize)> = obj.iter()
-            .map(|(k, val)| (k.clone(), val.as_array().map(|a| a.len()).unwrap_or(0)))
-            .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
-        for (k, n) in rows.iter().take(40) {
-            out.push_str(&format!("• {} — {n} гаманців\n", esc(k)));
+/// Групи капіталу — у нормалізованому вигляді.
+///
+/// Формат даних змінювався, і бот має розуміти обидва:
+/// - старий — `dataset/capital-groups/wallets.json`: словник «назва → масив адрес»;
+/// - новий — `dataset/capital-groups.json`: список груп, де в кожній є учасники
+///   зі свіжими сумами та спільні активи.
+///
+/// Без цього команда `/група` мовчки не працювала б на копії, де лежить лише
+/// новіший файл (або навпаки).
+fn load_groups(r: &str) -> Vec<Grp> {
+    if let Some(v) = read_json(&format!("{r}/dataset/capital-groups/wallets.json")) {
+        if let Some(obj) = v.as_object() {
+            return obj
+                .iter()
+                .map(|(k, val)| Grp {
+                    id: k.clone(),
+                    label: k.clone(),
+                    members: val
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| {
+                                    x.as_str()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| x["address"].as_str().map(|s| s.to_string()))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect();
         }
-        if rows.len() > 40 { out.push_str(&format!("…і ще {}\n", rows.len() - 40)); }
+    }
+
+    let Some(v) = read_json(&format!("{r}/dataset/capital-groups.json")) else {
+        return vec![];
+    };
+    let Some(list) = v["groups"].as_array() else {
+        return vec![];
+    };
+    list.iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let assets: Vec<String> = g["commonAssets"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let members: Vec<String> = g["members"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x["address"].as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let label = if assets.is_empty() {
+                format!("група {}", i + 1)
+            } else {
+                assets.join(", ")
+            };
+            Grp { id: (i + 1).to_string(), label, members }
+        })
+        .collect()
+}
+
+fn group(arg: &str) -> String {
+    let q = arg.trim().to_lowercase();
+    let r = &cfg().root;
+    let groups = load_groups(r);
+    if groups.is_empty() {
+        return "груп капіталу в даних нема".to_string();
+    }
+
+    if q.is_empty() {
+        let mut out = String::from("<b>Групи капіталу</b>\n");
+        let mut rows: Vec<&Grp> = groups.iter().collect();
+        rows.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
+        for g in rows.iter().take(40) {
+            out.push_str(&format!(
+                "• {} <b>{}</b> — {} гаманців\n",
+                esc(&g.id),
+                esc(&g.label),
+                g.members.len()
+            ));
+        }
+        if rows.len() > 40 {
+            out.push_str(&format!("…і ще {}\n", rows.len() - 40));
+        }
         return out;
     }
-    match obj.keys().find(|k| k.to_lowercase() == id || k.to_lowercase().contains(&id)) {
-        Some(k) => {
-            let arr = obj[k].as_array().cloned().unwrap_or_default();
-            let mut out = format!("<b>Група {}</b>\nГаманців: {}\n\nПерші 10:\n", esc(k), arr.len());
-            for w in arr.iter().take(10) {
-                if let Some(s) = w.as_str() {
-                    out.push_str(&format!("• <a href=\"https://etherscan.io/address/{s}\">{}</a>\n",
-                        esc(&short(s))));
-                }
+
+    match groups.iter().find(|g| g.id == q || g.label.to_lowercase().contains(&q)) {
+        Some(g) => {
+            let mut out = format!(
+                "<b>Група {}</b>\n{} — гаманців: {}\n\nПерші 10:\n",
+                esc(&g.id),
+                esc(&g.label),
+                g.members.len()
+            );
+            for w in g.members.iter().take(10) {
+                out.push_str(&format!(
+                    "• <a href=\"https://etherscan.io/address/{w}\">{}</a>\n",
+                    esc(&short(w))
+                ));
             }
             out
         }
-        None => format!("групи «{}» нема. /група без аргументу — список усіх", esc(&id)),
+        None => format!(
+            "групи «{}» нема. /група без аргументу — список усіх",
+            esc(&q)
+        ),
     }
 }
 
@@ -1104,11 +1212,103 @@ async fn ask(q: &str, role: Role) -> String {
     if let Some(a) = ask_assistant(q, role).await { return a; }
     // 2. Модель З ДОСТУПОМ ДО ДАНИХ: сама вирішує, що подивитись, ми виконуємо.
     if let Some(a) = ask_ollama_tools(q).await { return a; }
-    // 3. Модель без даних — останній засіб, і він чесно помічений.
+    // 3. Те саме, але БЕЗ моделі: питання про конкретний гаманець, токен, групу,
+    //    монітори чи сигнали читається з тих самих файлів, які бот уже читає для
+    //    команд. Нічого не вигадує — усе просто з даних.
+    if let Some(a) = ask_local(q) { return a; }
+    // 4. Модель без даних — останній засіб, і він чесно помічений.
     match ask_ollama(q).await {
         Some(a) => format!("{}\n\n<i>⚠️ модель відповідала БЕЗ доступу до даних проєкту — числа з неї не бери</i>", esc(&a)),
         None => "не зрозумів питання, і модель не відповіла. /довідка — що я вмію".to_string(),
     }
+}
+
+/// Питання без асистента й без моделі — читається з локальних даних.
+///
+/// Не всі питання потребують моделі: «хто такий 0x…», «яка ціна ONDO»,
+/// «які є групи», «що з моніторами» — це пошук у тих самих файлах, які бот уже
+/// читає для команд `/гаманець`, `/токен`, `/група`, `/стан`, `/сигнали`.
+/// Тому навіть без `/api/ask` і без локальної моделі бот лишається корисним,
+/// а не відповідає «не зрозумів питання» наохочу.
+fn ask_local(q: &str) -> Option<String> {
+    let raw = q.trim();
+    if raw.is_empty() { return None; }
+    let low = raw.to_lowercase();
+
+    // гаманець — за повною адресою
+    if let Some(addr) = find_address(raw) {
+        return Some(strip_tags(&wallet(&addr)));
+    }
+
+    // токен — за символом у ВЕРХНЬОМУ регістрі (ONDO, ENA, WBTC)
+    if let Some(sym) = find_ticker(raw) {
+        if let Some(ans) = token_found(&sym) {
+            return Some(strip_tags(&ans));
+        }
+    }
+
+    // речі, які просто перелічуються з даних
+    if has_word(&low, &["групи", "група", "груп"]) {
+        return Some(strip_tags(&group("")));
+    }
+    if has_word(&low, &["монітор", "монітори", "стан", "працює", "живі", "застряг"]) {
+        return Some(strip_tags(&status()));
+    }
+    if has_word(&low, &["сигнал", "сигнали", "алерт"]) {
+        return Some(strip_tags(&signals("5")));
+    }
+    None
+}
+
+/// Повна адреса 0x… у тексті.
+fn find_address(s: &str) -> Option<String> {
+    let l = s.to_lowercase();
+    // Идемо по МЕЖАХ СИМВОЛІВ, а не по байтах: кирилиця в UTF-8 — це два байти,
+    // і зрізання посередині символу кинуло б панік (byte index not a char boundary).
+    for (i, _) in l.char_indices() {
+        let tail = &l[i..];
+        if tail.len() < 42 { continue; }
+        if !tail.starts_with("0x") { continue; }
+        if tail.as_bytes()[2..42].iter().all(|b| b.is_ascii_hexdigit()) {
+            return Some(tail[0..42].to_string());
+        }
+    }
+    None
+}
+
+/// Символ токена: слово з 2..=10 великих літер/цифр. Тільки у ВЕРХНЬОМУ регістрі
+/// — інакше «яка ціна ondo» та «зроби ondo» підходили б під «ONDO».
+fn find_ticker(s: &str) -> Option<String> {
+    for w in s.split(|c: char| !c.is_alphanumeric()) {
+        if w.len() >= 2 && w.len() <= 10 && w.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            && w.chars().any(|c| c.is_ascii_uppercase()) {
+            return Some(w.to_string());
+        }
+    }
+    None
+}
+
+/// Чи є у тексті хоч одне зі слів ( збіг по межах слова).
+fn has_word(low: &str, words: &[&str]) -> bool {
+    words.iter().any(|w| {
+        low.split(|c: char| !c.is_alphanumeric())
+            .any(|t| t == *w || (w.len() > 3 && t.starts_with(w)))
+    })
+}
+
+/// Токен знайдено в ринкових даних? `None` — такого токена в даних немає.
+fn token_found(sym: &str) -> Option<String> {
+    let r = &cfg().root;
+    let q = sym.to_lowercase();
+    let liq = read_json(&format!("{r}/dataset/backfill/token-liquidity.json"))?;
+    let obj = liq["tokens"].as_object()?;
+    for (k, v) in obj {
+        let s = v["symbol"].as_str().unwrap_or("").to_lowercase();
+        if k.to_lowercase() == q || s == q {
+            return Some(token_info(sym));
+        }
+    }
+    None
 }
 
 /// Прибирає HTML: те саме, що йде в Telegram, згодовується моделі як звичайний текст.
@@ -1293,7 +1493,9 @@ async fn ask_assistant(q: &str, role: Role) -> Option<String> {
     if pass.is_empty() {
         return None;
     }
-    let url = format!("http://127.0.0.1:{}/api/ask?q={}", c.port, urlencode(q));
+    // Адреса сервера — не завжди localhost: на Windows-машині сервер Wallet Radar
+    // живе на ноутбукці, тож запит інакше пішов би в порожнечу.
+    let url = format!("http://{}:{}/api/ask?q={}", c.api_host, c.port, urlencode(q));
     let r = http().get(&url).basic_auth(login, Some(pass)).send().await.ok()?;
     if !r.status().is_success() { return None; }
     let v: Value = r.json().await.ok()?;
@@ -1742,5 +1944,64 @@ mod tests {
         upsert_user(&mut users, "111", "someone", "Someone", Role::Viewer);
         assert!(users["users"]["111"]["role"] == "viewer");
         assert!(users["users"]["111"].get("code").is_none());
+    }
+
+    #[test]
+    fn command_whose_name_has_a_space_is_still_parsed() {
+        // "/в правах 123" — у назві команди є пробіл. Наївний розбір за першим
+        // пробілом дав би голову "/в" і аргумент "правах 123", тож назва з
+        // пробілом ніколи не збігалася б — команда мовчки тонула у запиті
+        // до асистента.
+        let (head, rest) = parse_cmd("/\u{0432} \u{043f}\u{0440}\u{0430}\u{0432}\u{0430}\u{0445} 123");
+        assert_eq!(head, "/\u{0432} \u{043f}\u{0440}\u{0430}\u{0432}\u{0430}\u{0445}");
+        assert_eq!(rest, "123");
+
+        // альтернативне написання без пробілу
+        let (head, rest) = parse_cmd("/\u{0432}\u{043f}\u{0440}\u{0430}\u{0432}\u{0430}\u{0445} 456");
+        assert_eq!(head, "/\u{0432}\u{043f}\u{0440}\u{0430}\u{0432}\u{0430}\u{0445}");
+        assert_eq!(rest, "456");
+
+        // звичайні команди не ламаються
+        let (head, rest) = parse_cmd("/\u{0433}\u{0430}\u{043c}\u{0430}\u{043d}\u{0435}\u{0446}\u{044c} 0x1234");
+        assert_eq!(head, "/\u{0433}\u{0430}\u{043c}\u{0430}\u{043d}\u{0435}\u{0446}\u{044c}");
+        assert_eq!(rest, "0x1234");
+
+        // команда без аргументів
+        let (head, rest) = parse_cmd("/\u{0441}\u{0442}\u{0430}\u{0442}");
+        assert_eq!(head, "/\u{0441}\u{0442}\u{0430}\u{0442}");
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn local_fallback_finds_address_and_ticker() {
+        assert_eq!(
+            find_address("who is 0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c?").unwrap(),
+            "0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c"
+        );
+        assert_eq!(find_ticker("price of ONDO now").unwrap(), "ONDO");
+        // lower case is not a ticker: "ondo" is a word, not a symbol
+        assert!(find_ticker("price of ondo now").is_none());
+        assert!(find_address("short 0xdeadbeef").is_none());
+        // a multi-byte char BEFORE the address: byte-wise slicing used to panic
+        // with "start byte index is not a char boundary"
+        assert_eq!(
+            find_address("\u{0447}\u{0442}\u{043e} 0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c").unwrap(),
+            "0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a live APP_ROOT with real data"]
+    fn local_fallback_answers_from_live_data() {
+        std::env::set_var("APP_ROOT", "/opt/wallet-tracker");
+        let _ = cfg();
+        for q in ["\u{044f}\u{043a}\u{0430} \u{0446}\u{0456}\u{043d}\u{0430} ONDO",
+                  "\u{0445}\u{0442}\u{043e} \u{0442}\u{0430}\u{043a}\u{0438}\u{0439} 0x4524d2f91f71ee172fcc1fb534b84ad4b2a63f7c",
+                  "\u{044f}\u{043a}\u{0456} \u{0454} \u{0433}\u{0440}\u{0443}\u{043f}\u{0438} \u{0454}",
+                  "\u{044f}\u{043a}\u{0456} \u{0441}\u{0442}\u{0430}\u{043d} \u{043c}\u{043e}\u{043d}\u{0456}\u{0442}\u{043e}\u{0440}\u{0456}\u{0432}"] {
+            let a = ask_local(q);
+            println!("Q={q:?} -> {}", a.as_deref().unwrap_or("<none>").chars().take(90).collect::<String>());
+            assert!(a.is_some(), "no local answer for {q:?}");
+        }
     }
 }
