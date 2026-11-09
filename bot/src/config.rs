@@ -95,6 +95,17 @@ pub struct WrConfig {
     pub username: String,
     /// Ім'я змінної оточення з паролем.
     pub password_env: String,
+    /// Ім'я змінної оточення з токеном синхронізації реєстру підключених.
+    /// Порожньо або не задано — реєстр на сервер не пишеться.
+    pub sync_token_env: String,
+    /// Чи синхронізувати реєстр підключених із сервером Wallet Radar.
+    ///
+    /// Тестові й локальні запуски мають це вимкнути: сервер **замінює**
+    /// файл реєстру цілком, тому тестовий інстанс із порожньою БД стер би
+    /// список реальних підписників.
+    pub registry_sync_enabled: bool,
+    /// Як часто синхронізувати реєстр.
+    pub registry_sync_interval_secs: u64,
     pub poll_interval_secs: u64,
     pub event_poll_interval_secs: u64,
     pub request_timeout_secs: u64,
@@ -107,6 +118,9 @@ impl Default for WrConfig {
             base_url: "http://127.0.0.1:3000".into(),
             username: "admin".into(),
             password_env: "WR_PASSWORD".into(),
+            sync_token_env: "TELEGRAM_SYNC_TOKEN".into(),
+            registry_sync_enabled: true,
+            registry_sync_interval_secs: 60,
             poll_interval_secs: 60,
             event_poll_interval_secs: 15,
             request_timeout_secs: 20,

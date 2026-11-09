@@ -54,6 +54,8 @@ password_env = "WR_PASSWORD"
 poll_interval_secs = 10
 event_poll_interval_secs = 5
 ws_path = "/ws"
+# Тестовий інстанс не має права перезаписувати серверний реєстр підключених.
+registry_sync_enabled = false
 
 [storage]
 backend = "sqlite"

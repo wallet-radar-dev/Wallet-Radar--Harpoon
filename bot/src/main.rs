@@ -10,12 +10,10 @@
 //! Жоден цикл не блокує інший: падіння джерела не зупиняє відповіді на
 //! запити, а падіння Telegram не зупиняє збір даних.
 
-mod config;
-
 use alert_engine::{Alert, AlertKind, Rule, Severity, Window};
 use anyhow::Context;
+use bot::{config::Config, registry};
 use broadcast::{BroadcastConfig, Broadcaster};
-use config::Config;
 use privacy_filter::PrivacyFilter;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -105,7 +103,24 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ─── Telegram ──────────────────────────────────────────────────
-    let mut bot = Bot::new(token.clone());
+    //
+    // Клієнт teloxide за замовчуванням має таймаут 17 секунд, а довге
+    // опитування Telegram триває `poll_timeout_secs`. Якщо не задати свій
+    // клієнт, запит обриватиметься на кожному кроці — і бот не отримає
+    // ЖОДНОГО оновлення (просто тихо не працюватиме).
+    let http_timeout = Duration::from_secs(cfg.bot.poll_timeout_secs.saturating_add(20));
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(http_timeout)
+        .tcp_nodelay(true)
+        .build()
+        .context("не вдалося зібрати HTTP-клієнт Telegram")?;
+    tracing::info!(
+        poll_timeout_secs = cfg.bot.poll_timeout_secs,
+        http_timeout_secs = http_timeout.as_secs(),
+        "довге опитування Telegram"
+    );
+    let mut bot = Bot::with_client(token.clone(), http);
     if let Some(api_url) = &cfg.telegram.api_url {
         if !api_url.is_empty() {
             let url = reqwest::Url::parse(api_url)
@@ -292,7 +307,38 @@ async fn main() -> anyhow::Result<()> {
         }));
     }
 
-    // 4. Черга розсилки.
+    // 4. Синхронізація реєстру підключених із сервером Wallet Radar:
+    //    сервер розсилає свої власні алерти саме цим списком.
+    //    Тестові інстанси її вимикають — див. `registry_sync_enabled`.
+    {
+        let sync_token = cfg.env(&cfg.wr.sync_token_env).unwrap_or_default();
+        if !cfg.wr.registry_sync_enabled {
+            tracing::info!("синхронізація реєстру вимкнена конфігурацією");
+        } else if sync_token.is_empty() {
+            tracing::warn!(
+                env = %cfg.wr.sync_token_env,
+                "токен синхронізації реєстру не задано — серверні алерти йтимуть за старим списком"
+            );
+        } else {
+            let sync = Arc::new(registry::RegistrySync::new(
+                store.clone(),
+                &cfg.wr.base_url,
+                &sync_token,
+            ));
+            // Перша синхронізація — відразу, щоб сервер одразу бачив актуальний список.
+            match sync.sync_once().await {
+                Ok(n) => tracing::info!(users = n, "реєстр підключених синхронізовано із сервером"),
+                Err(e) => tracing::warn!(error = %e, "перша синхронізація реєстру не вдалась"),
+            }
+            let stop = stop.clone();
+            let interval = Duration::from_secs(cfg.wr.registry_sync_interval_secs.max(15));
+            tasks.push(tokio::spawn(async move {
+                sync.run(interval, stop).await;
+            }));
+        }
+    }
+
+    // 5. Черга розсилки.
     {
         let broadcaster = broadcaster.clone();
         let stop = stop.clone();
@@ -378,9 +424,14 @@ async fn telegram_loop(
                 for upd in updates {
                     offset = offset.max(upd.update_id + 1);
                     // Повторний update не виконуємо двічі.
+                    //
+                    // `seen_update` повертає true, коли update ЗАПИСАНО вперше
+                    // (тобто він новий), і false, коли це дубль. Тут легко
+                    // переплутати полярність — і тоді бот обробляє лише
+                    // дублікати, а нові пропускає: команди не відповідають.
                     match store.seen_update(upd.update_id).await {
-                        Ok(true) => continue,
-                        Ok(false) => {}
+                        Ok(true) => {}
+                        Ok(false) => continue,
                         Err(e) => {
                             tracing::warn!(error = %e, "не вдалося зафіксувати update");
                         }
@@ -625,9 +676,10 @@ async fn ingest(
         if ev.ts > max_ts {
             max_ts = ev.ts;
         }
+        // `seen_event` — true, коли подію записано вперше (тобто вона нова).
         match store.seen_event(&ev.id, ev.ts).await {
-            Ok(true) => continue,
-            Ok(false) => fresh.push(ev),
+            Ok(true) => fresh.push(ev),
+            Ok(false) => continue,
             Err(e) => {
                 tracing::warn!(error = %e, "не вдалося перевірити дубль події");
             }

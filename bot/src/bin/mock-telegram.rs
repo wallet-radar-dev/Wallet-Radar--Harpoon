@@ -82,7 +82,13 @@ async fn handle(
     let path = request_line.split_whitespace().nth(1).unwrap_or("/");
     let lower_path = path.to_lowercase();
     let response = if lower_path.contains("getupdates") {
-        "{\"ok\":true,\"result\":[]}"
+        // Можна підкласти оновлення з файлу (MOCK_UPDATES) — так перевіряється
+        // увесь шлях «отримали команду → відповіли», а не лише опитування.
+        match std::env::var("MOCK_UPDATES") {
+            Ok(path) => std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| "{\"ok\":true,\"result\":[]}".into()),
+            Err(_) => "{\"ok\":true,\"result\":[]}".to_string(),
+        }
     } else if lower_path.contains("sendmessage") {
         // Витягуємо текст повідомлення: значення рядкового поля "text".
         if let Some(start) = body.find("\"text\":") {
@@ -119,9 +125,9 @@ async fn handle(
                 }
             }
         }
-        "{\"ok\":true,\"result\":{\"message_id\":1,\"date\":0,\"chat\":{\"id\":0,\"type\":\"private\"}}}"
+        "{\"ok\":true,\"result\":{\"message_id\":1,\"date\":0,\"chat\":{\"id\":0,\"type\":\"private\"}}}".to_string()
     } else {
-        "{\"ok\":true,\"result\":true}"
+        "{\"ok\":true,\"result\":true}".to_string()
     };
 
     let resp = format!(

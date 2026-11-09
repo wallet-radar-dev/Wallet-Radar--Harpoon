@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use wr_client::{Phase, RawEvent, Snapshot};
+use wr_client::{CrossAssetRow, Phase, RawEvent, Snapshot};
 
 /// Вид алерту.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -191,6 +191,9 @@ pub struct Alert {
     pub kind: AlertKind,
     pub severity: Severity,
     pub asset: AssetLabel,
+    /// Супутні активи того самого сигналу — щоб не надсилати по алерту на
+    /// кожен актив (було понад 20 повідомлень замість одного).
+    pub related: Vec<AssetLabel>,
     pub direction: Option<Direction>,
     pub metrics: Metrics,
     pub archetype: Option<String>,
@@ -258,6 +261,12 @@ impl Alert {
             out.push_str(&format!(" · {}", self.asset.symbol));
         }
         out.push('\n');
+
+        if !self.related.is_empty() {
+            let names: Vec<String> = self.related.iter().map(|a| a.symbol.clone()).collect();
+            let label = if en { "also" } else { "також" };
+            out.push_str(&format!("• {label}: {}\n", names.join(", ")));
+        }
 
         let m = &self.metrics;
         let window_label = m.window.as_str();
@@ -494,6 +503,7 @@ impl Engine {
                     out.push(Alert {
                         key,
                         kind: AlertKind::LiquidationSpike,
+                        related: Vec::new(),
                         severity: Severity::High,
                         asset: AssetLabel::unknown("MARKET"),
                         direction: None,
@@ -514,39 +524,62 @@ impl Engine {
         }
 
         // 3. Cross-asset: актив, який тримає багато гаманців-«мультиактивів».
+        //
+        //    Один алерт на ВІКНО, а не на кожен актив: на живих даних таких
+        //    активів два десятки, і алерт на кожен — це два десятки
+        //    повідомлень кожному підписнику за один зріз. Топ-3 за часткою —
+        //    це сигнал, а не шум.
         if let Some(rule) = self
             .rules
             .iter()
             .find(|r| r.kind == AlertKind::CrossAssetAnomaly)
         {
-            for row in &snap.cross_asset {
-                if row.holders >= rule.min_participants && rule.covers_asset(&row.symbol) {
-                    let key = AlertKey::derive(
-                        AlertKind::CrossAssetAnomaly,
-                        &row.symbol,
-                        snap.as_of / 3_600_000,
-                        &[&row.symbol],
-                    );
-                    if self.emitted.insert(key.clone()) {
-                        out.push(Alert {
-                            key,
-                            kind: AlertKind::CrossAssetAnomaly,
-                            severity: rule.severity,
-                            asset: AssetLabel::unknown(row.symbol.clone()),
-                            direction: None,
-                            metrics: Metrics {
-                                participants: row.holders,
-                                total_value_usd: 0.0,
-                                group_share_pct: None,
-                                concentration_top10_pct: None,
-                                group_size: None,
-                                window: Window::W1h,
-                            },
-                            archetype: None,
-                            degraded: self.degraded,
-                            created_at: snap.as_of,
-                        });
-                    }
+            let mut rows: Vec<&CrossAssetRow> = snap
+                .cross_asset
+                .iter()
+                .filter(|row| {
+                    row.holders >= rule.min_participants && rule.covers_asset(&row.symbol)
+                })
+                .collect();
+            if !rows.is_empty() {
+                rows.sort_by(|a, b| {
+                    b.share_pct
+                        .partial_cmp(&a.share_pct)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let top: Vec<&CrossAssetRow> = rows.into_iter().take(3).collect();
+                let symbols: Vec<String> = top.iter().map(|r| r.symbol.clone()).collect();
+                let evidence: Vec<&str> = symbols.iter().map(|s| s.as_str()).collect();
+                let key = AlertKey::derive(
+                    AlertKind::CrossAssetAnomaly,
+                    &symbols.join(","),
+                    snap.as_of / 3_600_000,
+                    &evidence,
+                );
+                if self.emitted.insert(key.clone()) {
+                    let participants = top.iter().map(|r| r.holders).max().unwrap_or(0);
+                    out.push(Alert {
+                        key,
+                        kind: AlertKind::CrossAssetAnomaly,
+                        severity: rule.severity,
+                        asset: AssetLabel::unknown(symbols[0].clone()),
+                        related: symbols[1..]
+                            .iter()
+                            .map(|s| AssetLabel::unknown(s.clone()))
+                            .collect(),
+                        direction: None,
+                        metrics: Metrics {
+                            participants,
+                            total_value_usd: 0.0,
+                            group_share_pct: top.first().map(|r| r.share_pct),
+                            concentration_top10_pct: None,
+                            group_size: None,
+                            window: Window::W1h,
+                        },
+                        archetype: None,
+                        degraded: self.degraded,
+                        created_at: snap.as_of,
+                    });
                 }
             }
         }
@@ -579,6 +612,7 @@ impl Engine {
                     .cloned()
                     .unwrap_or_else(|| "GROUP".into()),
             ),
+            related: Vec::new(),
             direction: None,
             metrics: Metrics {
                 participants: member_count,
@@ -674,6 +708,7 @@ impl Engine {
                         kind: rule.kind,
                         severity: rule.severity,
                         asset: AssetLabel::unknown(symbol.clone()),
+                        related: Vec::new(),
                         direction: Some(if inflow {
                             Direction::Accumulation
                         } else {
@@ -855,6 +890,36 @@ mod tests {
         let k3 = AlertKey::derive(AlertKind::WhaleAccumulation, "SOL", 1_000_001, &["a"]);
         assert_eq!(k1, k2);
         assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn cross_asset_gives_one_alert_per_window_not_one_per_asset() {
+        let mut e = Engine::new(vec![Rule {
+            kind: AlertKind::CrossAssetAnomaly,
+            min_participants: 10,
+            min_total_value_usd: 0.0,
+            windows: vec![Window::W1h],
+            assets: vec![],
+            severity: Severity::Info,
+        }]);
+        let mut snap = Snapshot::default();
+        for (i, sym) in ["OKB", "ARB", "BICO", "RLUSD", "LIT"].iter().enumerate() {
+            snap.cross_asset.push(wr_client::CrossAssetRow {
+                symbol: (*sym).to_string(),
+                holders: 20,
+                share_pct: 10.0 - i as f64,
+            });
+        }
+        let alerts = e.apply_snapshot(&snap);
+        assert_eq!(
+            alerts.len(),
+            1,
+            "повинно бути один алерт на вікно, а не по одному на актив"
+        );
+        assert_eq!(alerts[0].asset.symbol, "OKB", "перший — найбільша частка");
+        assert_eq!(alerts[0].related.len(), 2, "решта топ-3 — у супутніх");
+        let text = alerts[0].render("uk");
+        assert!(text.contains("також: ARB, BICO"), "текст: {text}");
     }
 
     #[test]
