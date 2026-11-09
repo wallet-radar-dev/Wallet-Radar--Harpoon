@@ -724,20 +724,16 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
 
     /// Воркер черги: крутиться, поки не скажуть зупинитися.
     pub async fn run_worker(self: Arc<Self>, stop: Arc<AtomicBool>) {
-        let mut last_expire = alert_engine_now_ms();
         while !stop.load(Ordering::Relaxed) {
             let now = alert_engine_now_ms();
-            // Межа буфера перевіряється раз на 30 секунд: частіше — то
-            // марно смикати БД, рідше — прострочене могло б протриматися
-            // зайві пів-хвилини.
-            if now - last_expire >= BACKLOG_CHECK_INTERVAL_MS {
-                last_expire = now;
-                match self.expire_backlog(now).await {
-                    Ok(0) => {}
-                    Ok(n) => tracing::debug!(expired = n, "черга: скинуто застарілі доставки"),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "черга: не вдалося перевірити межу буфера")
-                    }
+            // Межа буфера перевіряється **перед** відбором доставок, на кожному
+            // кроці: інакше прострочена доставка встигла б вийти з черги й
+            // піти користувачеві на один цикл раніше, ніж її скинули.
+            match self.expire_backlog(now).await {
+                Ok(0) => {}
+                Ok(n) => tracing::debug!(expired = n, "черга: скинуто застарілі доставки"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "черга: не вдалося перевірити межу буфера")
                 }
             }
             // Злиття зведених дайджестів — до відправки черги, щоб
@@ -757,9 +753,6 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
         tracing::info!("воркер розсилки зупинено");
     }
 }
-
-/// Як часто воркер перевіряє межу буфера (мс).
-const BACKLOG_CHECK_INTERVAL_MS: i64 = 30_000;
 
 fn alert_engine_now_ms() -> i64 {
     std::time::SystemTime::now()

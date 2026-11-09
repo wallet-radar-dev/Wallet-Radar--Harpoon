@@ -117,18 +117,23 @@ impl WrClient {
 
     /// Зріз агрегатів. Одна недоступна секція не ламає весь зріз: її повертаємо
     /// порожньою й логуємо — краще показати менше, ніж не показати нічого.
+    ///
+    /// **`source_reachable`** — чи джерело взагаді відповідає. Секції
+    /// деградують у порожні, тож сам по собі `snapshot()` завжди `Ok`: без
+    /// ціє ознаки оркестратор не відрізнив би «джерело впало» від «сервер
+    /// відповів 404 на секцію, якої тут немає».
     pub async fn snapshot(&self) -> Result<Snapshot, WrError> {
-        let signals = self.section("/api/signals", parse::parse_signals).await;
-        let whale_assets = self
+        let (signals, _) = self.section("/api/signals", parse::parse_signals).await;
+        let (whale_assets, ok_assets) = self
             .section("/api/whale-assets", parse::parse_whale_assets)
             .await;
-        let groups = self
+        let (groups, ok_groups) = self
             .section("/api/capital-groups", parse::parse_capital_groups)
             .await;
-        let cross_asset = self
+        let (cross_asset, ok_cross) = self
             .section("/api/cross-asset", parse::parse_cross_asset)
             .await;
-        let archetypes = self
+        let (archetypes, _) = self
             .section("/api/meta-subnets", parse::parse_archetypes)
             .await;
 
@@ -157,10 +162,18 @@ impl WrClient {
             liquidations,
             archetypes,
             track_record,
+            // Опорні секції: саме за ними судимо, чи джерело живе. Відсутність
+            // маршруту (404) — це відповідь сервера, тож джерело доступне;
+            // недоступне воно лише тоді, коли сервер не відповів узагалі.
+            source_reachable: ok_assets || ok_groups || ok_cross,
         })
     }
 
-    async fn section<T>(&self, path: &str, f: fn(&Value) -> T) -> T
+    /// Секція зрізу: значення + чи сервер на неї відповів.
+    ///
+    /// Другий елемент — «сервер відповів» (хоч би 404): це те, за чим ми
+    /// судимо про доступність джерела, а не про наявність маршруту.
+    async fn section<T>(&self, path: &str, f: fn(&Value) -> T) -> (T, bool)
     where
         T: Default,
     {
@@ -170,11 +183,12 @@ impl WrClient {
                 if !denied.is_empty() {
                     tracing::debug!(path, ?denied, "відповідь містила поля, які не копіюємо");
                 }
-                f(&v)
+                (f(&v), true)
             }
             Err(e) => {
+                let answered = !is_transport_failure(&e);
                 tracing::warn!(path, error = %e, "секція джерела недоступна — порожньо");
-                T::default()
+                (T::default(), answered)
             }
         }
     }
@@ -186,10 +200,76 @@ impl WrClient {
     }
 }
 
+/// Помилка — це «сервер не відповів» (а не «сервер відповів не так»).
+///
+/// Транспортний збій (з'єднання відхилено, таймаут, DNS) означає, що джерело
+/// недоступне. HTTP-відповідь (навіть 404 чи 500) — джерело відповідає.
+fn is_transport_failure(e: &WrError) -> bool {
+    matches!(e, WrError::Transport(_) | WrError::Connect(_))
+}
+
 /// Поточний час у мс.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Мінімальний HTTP-відповідач: на будь-який запит — 404 (маршруту
+    /// такого немає, але сервер **відповів**).
+    async fn spawn_404_server() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf).await;
+                    let resp =
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(resp).await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn зріз_каже_що_джерело_доступне_навіть_якщо_секції_404() {
+        // Відсутність маршруту — це відповідь сервера, а не збій джерела:
+        // саме так виглядає розгорнутий Wallet Radar без /api/signals.
+        let port = spawn_404_server().await;
+        let client = WrClient::new(format!("http://127.0.0.1:{port}"), "admin", "pass");
+        let snap = client.snapshot().await.expect("зріз");
+        assert!(
+            snap.source_reachable,
+            "сервер відповів — джерело доступне, буфер не вмикається"
+        );
+    }
+
+    #[tokio::test]
+    async fn зріз_каже_що_джерело_недоступне_коли_server_не_відповідає() {
+        // Порт без слухача: з'єднання відхиляється — це транспортна помилка,
+        // тобто джерело впало.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener);
+
+        let client = WrClient::new(format!("http://127.0.0.1:{port}"), "admin", "pass");
+        let snap = client.snapshot().await.expect("зріз");
+        assert!(
+            !snap.source_reachable,
+            "сервер не відповів — джерело недоступне, черга має буферизуватися"
+        );
+    }
 }

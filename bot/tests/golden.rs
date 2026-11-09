@@ -149,6 +149,7 @@ fn fixture_snapshot() -> wr_client::Snapshot {
         }),
         archetypes: vec![],
         track_record: None,
+        source_reachable: true,
     }
 }
 

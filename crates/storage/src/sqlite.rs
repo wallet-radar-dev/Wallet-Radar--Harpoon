@@ -101,6 +101,9 @@ CREATE TABLE IF NOT EXISTS deliveries (
   created_at BIGINT NOT NULL, sent_at BIGINT, last_error TEXT, text TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (chat_id, alert_key));
 CREATE INDEX IF NOT EXISTS deliveries_due_idx ON deliveries (status, next_attempt_at, priority);
+-- Індекс для межі буфера: пошук `pending` за віком. Без нього перевірка
+-- межї (а вона — на кожному кроці черги) сканувала б усю таблицю.
+CREATE INDEX IF NOT EXISTS deliveries_backlog_idx ON deliveries (status, created_at);
 CREATE TABLE IF NOT EXISTS seen_events (event_id TEXT PRIMARY KEY, ts BIGINT NOT NULL);
 -- Сигнали, згорнуті у зведений дайджест, але ще не відправлені.
 -- Буфер у БД, а не в памʼяті: перезапуск процесу не має втрачати згорнуті
