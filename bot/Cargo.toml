@@ -1,0 +1,30 @@
+[package]
+name = "bot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bot"
+path = "src/main.rs"
+
+[dependencies]
+privacy-filter = { workspace = true }
+storage = { workspace = true }
+wr-client = { workspace = true }
+alert-engine = { workspace = true }
+broadcast = { workspace = true }
+user-session = { workspace = true }
+telegram-gateway = { workspace = true }
+admin = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+teloxide = { workspace = true }
+reqwest = { workspace = true }

@@ -1,0 +1,19 @@
+[Unit]
+Description=Wallet Radar Alerts Bot — багатокористувацький Telegram-бот з алертами
+Documentation=file:///opt/wallet-radar-alerts-bot/README.md
+After=network-online.target wallet-radar-rust.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/wallet-radar-alerts-bot
+EnvironmentFile=/opt/wallet-radar-alerts-bot/.env
+ExecStart=/opt/wallet-radar-alerts-bot/bin/bot /opt/wallet-radar-alerts-bot/config.toml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

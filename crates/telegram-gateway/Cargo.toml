@@ -1,0 +1,21 @@
+[package]
+name = "telegram-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+storage = { workspace = true }
+admin = { workspace = true }
+wr-client = { workspace = true }
+user-session = { workspace = true }
+privacy-filter = { workspace = true }
+alert-engine = { workspace = true }
+broadcast = { workspace = true }
+teloxide = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

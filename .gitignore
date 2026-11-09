@@ -77,3 +77,16 @@ dataset/.whale-hunt-mc-progress.json
 
 # Стан campwatch — перезаписується на кожному прогоні
 dataset/backfill/campwatch-state.json
+
+# --- з гілки з ботом ---
+/target
+/data
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+config.toml
+!config.example.toml
+*.log
+.DS_Store
