@@ -154,6 +154,9 @@ async fn main() -> anyhow::Result<()> {
         global_per_sec: cfg.rate_limits.telegram_global_per_sec,
         per_chat_min_interval_ms: cfg.rate_limits.telegram_per_chat_min_interval_ms,
         max_pending_per_chat: cfg.rate_limits.max_pending_per_chat,
+        // Згортання «широких» сигналів у зведений дайджест.
+        digest_threshold_pct: cfg.broadcast.digest_threshold_pct,
+        digest_window_secs: cfg.broadcast.digest_window_secs,
         ..BroadcastConfig::default()
     };
     let broadcaster = Arc::new(Broadcaster::new(
@@ -194,6 +197,13 @@ async fn main() -> anyhow::Result<()> {
 
     // ─── Стан процесу ──────────────────────────────────────────────
     let stop = Arc::new(AtomicBool::new(false));
+    // Помилка поллера Telegram: якщо поллер упав (409, некоректний токен),
+    // процес має завершитися ненульовим кодом — інакше systemd не підніме
+    // його знову, і бот лишиться мертвим.
+    let telegram_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Канал зупинки для поллера: довге опитування треба переривати, а не
+    // чекати на нього до 25 секунд (див. обробку SIGTERM нижче).
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Чесно кажемо, які ручки ще не задіяні: краще попередження в лозі, ніж
     // тихий параметр, який нічого не робить.
@@ -201,12 +211,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("features.assistant увімкнено, але асистент не реалізований — ігнорую");
     }
     if cfg.broadcast.digest_threshold_pct > 0 {
-        tracing::warn!(
+        tracing::info!(
             threshold = cfg.broadcast.digest_threshold_pct,
             window_secs = cfg.broadcast.digest_window_secs,
-            backlog_minutes = cfg.broadcast.max_backlog_minutes,
-            "згортання дублів у дайджест ще не реалізовано — алерти йдуть як є"
+            "згортання широких сигналів у зведений дайджест увімкнено"
         );
+    } else {
+        tracing::info!("згортання сигналів у зведений дайджест вимкнено");
     }
 
     tracing::info!(
@@ -242,18 +253,29 @@ async fn main() -> anyhow::Result<()> {
         let router = router.clone();
         let broadcaster = broadcaster.clone();
         let stop = stop.clone();
+        let telegram_error = telegram_error.clone();
         tasks.push(tokio::spawn(async move {
-            telegram_loop(
+            if let Err(e) = telegram_loop(
                 store,
                 router,
                 broadcaster,
                 poller,
                 stop,
+                shutdown_rx.clone(),
                 // Тут — у мілісекундах: порівнюємо з «тиша Telegram», а не з
                 // тривалістю поллінгу.
                 cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
             )
             .await
+            {
+                // Помилка зупинки Telegram (409 або некоректний токен) —
+                // фіксуємо її для всього процесу: код виходу ненульовий,
+                // systemd спробує підняти бота ще раз.
+                telegram_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .replace(e.to_string());
+            }
         }));
     }
 
@@ -350,6 +372,7 @@ async fn main() -> anyhow::Result<()> {
     // Зупинка за SIGTERM/SIGINT.
     {
         let stop = stop.clone();
+        let shutdown = shutdown_tx.clone();
         tokio::spawn(async move {
             let mut sigterm =
                 match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -364,12 +387,27 @@ async fn main() -> anyhow::Result<()> {
                 _ = tokio::signal::ctrl_c() => tracing::info!("отримано Ctrl-C — завершуюся"),
             }
             stop.store(true, Ordering::Relaxed);
+            // Сигнал для поллера: довге опитування треба **перервати**,
+            // інакше процес чекатиме на нього до 25 секунд, systemd
+            // вб'є його — і «мертве» getUpdates-з'єднання дасть наступному
+            // інстансу 409 Conflict.
+            let _ = shutdown.send(true);
         });
     }
 
     // Чекаємо завершення циклів.
     for t in tasks {
         let _ = t.await;
+    }
+    // Поллер упав? Тоді виходимо з помилкою: ненульовий код змусить
+    // systemd підняти бота знову (обмежена кількість спроб).
+    let poller_error = {
+        let guard = telegram_error.lock().unwrap_or_else(|e| e.into_inner());
+        guard.clone()
+    };
+    if let Some(msg) = poller_error {
+        tracing::info!("бот зупинено");
+        return Err(anyhow::anyhow!("поллер Telegram зупинено: {msg}"));
     }
     tracing::info!("бот зупинено");
     Ok(())
@@ -390,8 +428,9 @@ async fn telegram_loop(
     broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
     poller: TeloxidePoller,
     stop: Arc<AtomicBool>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
     cfg_heartbeat_ms: u64,
-) {
+) -> Result<(), anyhow::Error> {
     let mut last_update_ms = now_ms();
     let mut last_warn_ms = now_ms();
     let mut offset: i64 = store
@@ -404,7 +443,21 @@ async fn telegram_loop(
     let mut backoff = Duration::from_secs(1);
 
     while !stop.load(Ordering::Relaxed) {
-        match poller.poll(offset).await {
+        // Опитування перериваємо на зупинці: інакше процес чекатиме на
+        // відповідь Telegram до 25 секунд, systemd вб'є його — і «мертве»
+        // getUpdates-з'єднання дасть наступному інстансу 409 Conflict.
+        let polled = tokio::select! {
+            res = poller.poll(offset) => Some(res),
+            _ = shutdown.changed() => None,
+        };
+        let polled = match polled {
+            Some(res) => res,
+            None => {
+                tracing::info!("опитування Telegram перервано зупинкою");
+                return Ok(());
+            }
+        };
+        match polled {
             Ok(updates) => {
                 backoff = Duration::from_secs(1);
                 if updates.is_empty() {
@@ -462,12 +515,17 @@ async fn telegram_loop(
                      Другий бот на тому самому токені запускати не можна — зупиняюсь."
                 );
                 stop.store(true, Ordering::Relaxed);
-                return;
+                // Помилка, а не штатний вихід: systemd підніме бота ще раз
+                // (обмежена кількість спроб). 409 буває й тимчасовим — наприклад,
+                // коли попередній інстанс ще не відпустив з'єднання.
+                return Err(anyhow::anyhow!(
+                    "409 Conflict: на токені вже працює інший полер Telegram"
+                ));
             }
             Err(telegram_gateway::PollerError::InvalidToken(msg)) => {
                 tracing::error!(%msg, "некоректний токен Telegram — зупиняюсь");
                 stop.store(true, Ordering::Relaxed);
-                return;
+                return Err(anyhow::anyhow!("некоректний токен Telegram: {msg}"));
             }
             Err(e) => {
                 tracing::warn!(error = %e, "помилка поллінгу Telegram — повторю");
@@ -476,6 +534,7 @@ async fn telegram_loop(
             }
         }
     }
+    Ok(())
 }
 
 /// Цикл зрізів джерела.
@@ -724,6 +783,16 @@ async fn publish_all(
                 tracing::debug!(
                     kind = alert.kind.as_str(),
                     "алерт уже відомий — дубль відкинуто"
+                );
+            }
+            Ok(broadcast::PublishOutcome::Folded { recipients }) => {
+                // Сигнал згорнуто: підписники отримають одне зведене
+                // повідомлення за вікно замість окремих на кожен алерт.
+                tracing::info!(
+                    kind = alert.kind.as_str(),
+                    asset = %alert.asset.symbol,
+                    recipients,
+                    "сигнал згорнуто у зведений дайджест"
                 );
             }
             Err(e) => {

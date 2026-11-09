@@ -14,11 +14,15 @@ WorkingDirectory=/opt/wallet-radar-alerts-bot
 EnvironmentFile=/opt/wallet-radar-alerts-bot/.env
 ExecStart=/opt/wallet-radar-alerts-bot/bin/bot /opt/wallet-radar-alerts-bot/config.toml
 # on-failure, а не always: бот, який завершився через 409 (на токені вже
-# працює інший полер), виходить із кодом 0 і НЕ піднімається знову — інакше
-# виникає безкінечний цикл старт/409/старт. Падіння (ненульовий код) —
-# піднімаємо.
+# працює інший полер), виходить із помилкою — і systemd піднімає його ще
+# раз, але не більше 5 разів за 5 хвилин. Так бот не лишається мертвим
+# надовго, але й не крутить безкінечний цикл старт/409/старт.
 Restart=on-failure
 RestartSec=15
+# Зупинка має встигнути перервати довге опитування Telegram (25 с).
+# Якщо systemd уб'є процес раніше, «мертве» getUpdates-з'єднання дасть
+# наступному інстансу 409 Conflict.
+TimeoutStopSec=45
 StandardOutput=journal
 StandardError=journal
 

@@ -373,6 +373,148 @@ impl Alert {
         }
         out
     }
+
+    /// Зведений вигляд сигналу: коли кілька однакових алертів за вікно
+    /// згорнули в одне повідомлення.
+    ///
+    /// `count` — скільки алертів згорнулося. Метрики беруться з
+    /// **сильнішого** алерту групи, а не з останнього: користувачеві
+    /// цікавить максимум, а не останній знімок.
+    pub fn render_folded(&self, count: usize, lang: &str) -> String {
+        let en = lang.starts_with("en");
+        let mut out = String::new();
+
+        let (icon, title) = match self.kind {
+            AlertKind::WhaleAccumulation => (
+                "🐋",
+                if en {
+                    "Accumulation"
+                } else {
+                    "Накопичення"
+                },
+            ),
+            AlertKind::WhaleDistribution => (
+                "🐋",
+                if en {
+                    "Distribution"
+                } else {
+                    "Розподіл"
+                },
+            ),
+            AlertKind::PumpPhase => (
+                "🚀",
+                if en {
+                    "Pump phase"
+                } else {
+                    "Памп-фаза"
+                },
+            ),
+            AlertKind::LiquidationSpike => (
+                "💥",
+                if en {
+                    "Liquidations"
+                } else {
+                    "Ліквідації"
+                },
+            ),
+            AlertKind::CapitalGroupChange => (
+                "🧬",
+                if en {
+                    "Capital group"
+                } else {
+                    "Капітал-група"
+                },
+            ),
+            AlertKind::CrossAssetAnomaly => ("🔀", "Cross-asset"),
+        };
+
+        if count > 1 {
+            out.push_str(&format!(
+                "📊 {} · {}\n",
+                if en { "Summary" } else { "Зведено" },
+                if en {
+                    format!("{count} signals")
+                } else {
+                    format!("{count} {}", plural_signals(count))
+                }
+            ));
+        }
+        out.push_str(&format!("{icon} {title}"));
+        if !self.asset.symbol.is_empty() {
+            out.push_str(&format!(" · {}", self.asset.symbol));
+        }
+        out.push('\n');
+
+        let m = &self.metrics;
+        let participants = if en {
+            format!("{} participants", m.participants)
+        } else {
+            format!("{} учасників", m.participants)
+        };
+        if m.total_value_usd > 0.0 {
+            out.push_str(&format!(
+                "• {participants} · ${} {} {}\n",
+                fmt_usd(m.total_value_usd),
+                if en { "over" } else { "за" },
+                m.window.as_str()
+            ));
+        } else {
+            out.push_str(&format!("• {participants}\n"));
+        }
+        if self.degraded {
+            out.push_str(if en {
+                "⚠️ source was incomplete — data may be missing\n"
+            } else {
+                "⚠️ джерело було неповним — дані можуть бути не всі\n"
+            });
+        }
+        out
+    }
+}
+
+/// Зведена група однакових сигналів за вікно.
+///
+/// Групування — за видом алерту та вікном, **не** за активом: інакше
+/// двадцять різних активів у cross-asset дали б двадцять повідомлень, а
+/// не одне зведення.
+#[derive(Clone, Debug)]
+pub struct FoldedSignal {
+    /// Скільки алертів згорнулося.
+    pub count: usize,
+    /// Активи групи (унікальні, до п'яти).
+    pub assets: Vec<String>,
+    /// Сильніший алерт групи.
+    pub strongest: Alert,
+}
+
+impl FoldedSignal {
+    /// Текст зведеного повідомлення.
+    pub fn render(&self, lang: &str) -> String {
+        let en = lang.starts_with("en");
+        let mut out = self.strongest.render_folded(self.count, lang);
+
+        // Активи групи: показуємо, коли їх кілька — саме це і робить
+        // повідомлення «зведеним», а не просто дублем першого.
+        if self.assets.len() > 1 {
+            let label = if en { "assets" } else { "активи" };
+            out.push_str(&format!("• {label}: {}\n", self.assets.join(", ")));
+        }
+        out
+    }
+}
+
+/// Українська множина для «сигнал»: 1 сигнал · 2 сигнали · 5 сигналів.
+fn plural_signals(n: usize) -> &'static str {
+    let rem100 = n % 100;
+    let rem10 = n % 10;
+    if (11..=14).contains(&rem100) {
+        return "сигналів";
+    }
+    match rem10 {
+        1 => "сигнал",
+        2..=4 => "сигнали",
+        _ => "сигналів",
+    }
 }
 
 /// Правило алерту (з конфіга).

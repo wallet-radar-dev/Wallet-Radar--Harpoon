@@ -67,9 +67,9 @@ impl HmacSha256 {
 }
 
 use crate::{
-    now_ms, AlertRecord, AuditEntry, Delivery, DeliveryStatus, DeliveryUpdate, Language,
-    NewDelivery, NewUser, Priority, Role, Settings, Store, StoreError, Subscription, Timeframe,
-    Topic, User, UserState,
+    now_ms, AlertRecord, AuditEntry, Delivery, DeliveryStatus, DeliveryUpdate, FoldPending,
+    Language, NewDelivery, NewUser, Priority, Role, Settings, Store, StoreError, Subscription,
+    Timeframe, Topic, User, UserState,
 };
 
 /// Схема БД. Використовується `IF NOT EXISTS`, тому повторний виклик безпечний.
@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS deliveries (
   PRIMARY KEY (chat_id, alert_key));
 CREATE INDEX IF NOT EXISTS deliveries_due_idx ON deliveries (status, next_attempt_at, priority);
 CREATE TABLE IF NOT EXISTS seen_events (event_id TEXT PRIMARY KEY, ts BIGINT NOT NULL);
+-- Сигнали, згорнуті у зведений дайджест, але ще не відправлені.
+-- Буфер у БД, а не в памʼяті: перезапуск процесу не має втрачати згорнуті
+-- алерти (інакше вони просто зникнуть із ротації).
+CREATE TABLE IF NOT EXISTS fold_pending (
+  alert_key TEXT PRIMARY KEY, kind TEXT NOT NULL, win TEXT NOT NULL,
+  asset TEXT, payload TEXT NOT NULL, created_at BIGINT NOT NULL);
+CREATE INDEX IF NOT EXISTS fold_pending_time_idx ON fold_pending (created_at);
 CREATE INDEX IF NOT EXISTS seen_events_ts_idx ON seen_events (ts);
 CREATE TABLE IF NOT EXISTS seen_updates (update_id BIGINT PRIMARY KEY, seen_at BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshots (as_of BIGINT PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'full', payload TEXT NOT NULL);
@@ -666,6 +673,64 @@ impl Store for SqliteStore {
                 out.push(r?);
             }
             Ok(out)
+        })
+        .await
+    }
+
+    async fn fold_pending_insert(&self, p: &FoldPending) -> Result<bool, StoreError> {
+        let p = p.clone();
+        self.call(move |conn| {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO fold_pending (alert_key, kind, win, asset, payload, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    p.alert_key,
+                    p.kind,
+                    p.win,
+                    p.asset,
+                    p.payload,
+                    p.created_at
+                ],
+            )?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+
+    async fn fold_pending_list(&self) -> Result<Vec<FoldPending>, StoreError> {
+        self.call(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT alert_key, kind, win, asset, payload, created_at FROM fold_pending
+                 ORDER BY created_at",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok(FoldPending {
+                    alert_key: r.get(0)?,
+                    kind: r.get(1)?,
+                    win: r.get(2)?,
+                    asset: r.get(3)?,
+                    payload: r.get(4)?,
+                    created_at: r.get(5)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    async fn fold_pending_remove(&self, alert_keys: &[String]) -> Result<usize, StoreError> {
+        let keys = alert_keys.to_vec();
+        self.call(move |conn| {
+            let mut removed = 0usize;
+            for k in &keys {
+                removed +=
+                    conn.execute("DELETE FROM fold_pending WHERE alert_key = ?1", params![k])?;
+            }
+            Ok(removed)
         })
         .await
     }
