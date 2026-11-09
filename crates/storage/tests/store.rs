@@ -442,3 +442,34 @@ async fn settings_cursor_snapshot_and_audit_are_persisted() {
         .expect("audit");
     assert_eq!(store.audit_count("chat:900").await.expect("count"), 1);
 }
+
+#[tokio::test]
+async fn alerts_since_returns_only_alerts_in_window_newest_first() {
+    let store = SqliteStore::open_in_memory().expect("БД у памʼяті");
+
+    let mut old = alert("old");
+    old.created_at = 1_000;
+    let mut mid = alert("mid");
+    mid.created_at = 2_000;
+    let mut new = alert("new");
+    new.created_at = 3_000;
+
+    store.register_alert(&old).await.expect("old");
+    store.register_alert(&mid).await.expect("mid");
+    store.register_alert(&new).await.expect("new");
+
+    // Вікно від 2_000: mid і new.
+    let rows = store.alerts_since(2_000).await.expect("alerts_since");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].alert_key, "new", "новіші спершу");
+    assert_eq!(rows[1].alert_key, "mid");
+
+    // Вікно від 3_000: лише new.
+    let rows = store.alerts_since(3_000).await.expect("alerts_since");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].alert_key, "new");
+
+    // Вікно в майбутньому — порожньо.
+    let rows = store.alerts_since(9_999).await.expect("alerts_since");
+    assert!(rows.is_empty());
+}

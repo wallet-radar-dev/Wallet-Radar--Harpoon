@@ -2318,6 +2318,7 @@ dependencies = [
 name = "user-session"
 version = "0.1.0"
 dependencies = [
+ "alert-engine",
  "serde",
  "storage",
  "thiserror",

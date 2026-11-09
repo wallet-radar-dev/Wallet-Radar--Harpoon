@@ -12,6 +12,8 @@
 //!    отримав підтвердження. `update_id` фіксується в сховищі, і команда
 //!    виконується один раз.
 
+pub mod digest;
+
 use admin::AdminService;
 use broadcast::{Notifier, Outbound, SendError};
 use serde::{Deserialize, Serialize};
@@ -378,7 +380,7 @@ impl<S: Session, A: AdminService> Router<S, A> {
             "assets" => Some(self.reply(upd, self.cmd_assets(&self.default_language))),
             "groups" => Some(self.reply(upd, self.cmd_groups(&self.default_language))),
             "signal" => Some(self.reply(upd, self.cmd_signal(&self.default_language, &rest))),
-            "digest" => Some(self.reply(upd, self.cmd_digest(&self.default_language, &rest))),
+            "digest" => Some(self.reply(upd, self.cmd_digest(upd, &rest).await)),
             "delete" => Some(self.reply(upd, self.cmd_delete(upd).await)),
             "stats" if self.is_admin(upd.username.as_deref()) => {
                 Some(self.reply(upd, self.cmd_stats().await))
@@ -608,43 +610,39 @@ impl<S: Session, A: AdminService> Router<S, A> {
         out
     }
 
-    fn cmd_digest(&self, lang: &str, rest: &str) -> String {
-        let period = rest.trim().to_lowercase();
-        let period = if period.starts_with("week") {
-            "weekly"
-        } else {
-            "daily"
+    /// Дайджест за період: добірка алертів, а не зріз стану.
+    ///
+    /// Мова — мова користувача, а не мова за замовчуванням: дайджест
+    /// персональний, тому й мова в ньому персональна.
+    async fn cmd_digest(&self, upd: &IncomingUpdate, rest: &str) -> String {
+        let period = digest::DigestPeriod::parse(rest);
+        let now = now_ms();
+
+        // Мова користувача.
+        let lang = match self.session.settings(upd.chat_id).await {
+            Ok(s) => s.language.as_str().to_string(),
+            Err(_) => self.default_language.clone(),
         };
-        let snap = match self.snapshot.get() {
-            Some(s) => s,
-            None => return "Джерело зараз недоступне — спробуйте за хвилину.".to_string(),
-        };
-        let en = lang.starts_with("en");
-        let mut out = if en {
-            format!("📬 {period} digest\n")
-        } else {
-            format!("📬 Дайджест ({period})\n")
-        };
-        out.push_str(&format!(
-            "• активів із сигналами: {}\n",
-            snap.whale_assets.len()
-        ));
-        out.push_str(&format!("• капітал-груп: {}\n", snap.groups.len()));
-        if let Some(liq) = &snap.liquidations {
-            out.push_str(&format!(
-                "• ліквідації за 24 год: ${}\n",
-                liq.w24h.total_usd.round() as i64
-            ));
-        }
-        out.push_str(&format!(
-            "\n{}",
-            if en {
-                "Aggregates only — no wallet addresses, no transactions."
-            } else {
-                "Тільки агрегати — без адрес гаманців і без транзакцій."
+
+        // Алерти за вікно, вже відфільтровані під користувача.
+        let records = match self
+            .session
+            .alerts_since(upd.chat_id, now - period.window_ms())
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "не вдалося прочитати алерти для дайджесту");
+                return if lang.starts_with("en") {
+                    "Could not read the alert history — try again in a minute.".to_string()
+                } else {
+                    "Не вдалося прочитати історію алертів — спробуйте за хвилину.".to_string()
+                };
             }
-        ));
-        out
+        };
+
+        let summary = digest::Digest::build(&records, period, now);
+        summary.render(&lang)
     }
 
     async fn cmd_delete(&self, upd: &IncomingUpdate) -> String {
@@ -722,10 +720,10 @@ impl<S: Session, A: AdminService> Router<S, A> {
 
     fn help(&self, lang: &str) -> String {
         if lang.starts_with("en") {
-            "📡 Wallet Radar Alerts\n\nWhat I can do:\n• /assets — assets with whale concentration\n• /groups — capital groups (aggregates only)\n• /signal SYMBOL — current aggregate signal for an asset\n• /digest daily|weekly — summary\n• /settings — language, timezone, timeframe\n• /mute / /unmute — pause alerts\n• /language uk|en\n• /delete — delete my data\n\nWhat I will never show: wallet addresses, tx hashes, individual transaction amounts."
+            "📡 Wallet Radar Alerts\n\nWhat I can do:\n• /assets — assets with whale concentration\n• /groups — capital groups (aggregates only)\n• /signal SYMBOL — current aggregate signal for an asset\n• /digest daily|weekly — alerts from the last day or week\n• /settings — language, timezone, timeframe\n• /mute / /unmute — pause alerts\n• /language uk|en\n• /delete — delete my data\n\nWhat I will never show: wallet addresses, tx hashes, individual transaction amounts."
                 .to_string()
         } else {
-            "📡 Wallet Radar Alerts\n\nЩо я вмію:\n• /assets — активи з концентрацією китів\n• /groups — капітал-групи (лише агрегати)\n• /signal SYMBOL — поточний агрегат по активу\n• /digest daily|weekly — зведення\n• /settings — мова, часовий пояс, таймфрейм\n• /mute / /unmute — тиша\n• /language uk|en\n• /delete — видалити мої дані\n\nЧого я не покажу ніколи: адреси гаманців, tx-hash, суми окремих транзакцій."
+            "📡 Wallet Radar Alerts\n\nЩо я вмію:\n• /assets — активи з концентрацією китів\n• /groups — капітал-групи (лише агрегати)\n• /signal SYMBOL — поточний агрегат по активу\n• /digest daily|weekly — алерти за добу або тиждень\n• /settings — мова, часовий пояс, таймфрейм\n• /mute / /unmute — тиша\n• /language uk|en\n• /delete — видалити мої дані\n\nЧого я не покажу ніколи: адреси гаманців, tx-hash, суми окремих транзакцій."
                 .to_string()
         }
     }

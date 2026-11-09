@@ -642,6 +642,34 @@ impl Store for SqliteStore {
         .await
     }
 
+    async fn alerts_since(&self, since_ms: i64) -> Result<Vec<AlertRecord>, StoreError> {
+        self.call(move |conn| {
+            // Параметризований запит: значення не зливаються в текст SQL.
+            let mut stmt = conn.prepare(
+                "SELECT alert_key, kind, asset, window_start, severity, degraded, payload, created_at
+                 FROM alert_log WHERE created_at >= ?1 ORDER BY created_at DESC, alert_key",
+            )?;
+            let rows = stmt.query_map(params![since_ms], |r| {
+                Ok(AlertRecord {
+                    alert_key: r.get(0)?,
+                    kind: r.get(1)?,
+                    asset: r.get(2)?,
+                    window_start: r.get(3)?,
+                    severity: r.get(4)?,
+                    degraded: r.get::<_, i64>(5)? != 0,
+                    payload: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    created_at: r.get(7)?,
+                })
+            })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     async fn seen_event(&self, event_id: &str, ts: i64) -> Result<bool, StoreError> {
         let event_id = event_id.to_string();
         self.call(move |conn| {

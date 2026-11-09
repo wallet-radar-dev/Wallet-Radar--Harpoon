@@ -51,6 +51,22 @@ impl AlertKind {
             _ => "whale",
         }
     }
+
+    /// Розбір коду виду алерту (те, що лежить у журналі `alert_log`).
+    ///
+    /// `None` — вид невідомий (наприклад, ручна розсилка адміністратора):
+    /// такий запис не належить до ринкових сигналів.
+    pub fn parse(s: &str) -> Option<AlertKind> {
+        match s.trim().to_lowercase().as_str() {
+            "whale_accumulation" => Some(AlertKind::WhaleAccumulation),
+            "whale_distribution" => Some(AlertKind::WhaleDistribution),
+            "pump_phase" => Some(AlertKind::PumpPhase),
+            "liquidation_spike" => Some(AlertKind::LiquidationSpike),
+            "capital_group_change" => Some(AlertKind::CapitalGroupChange),
+            "cross_asset_anomaly" => Some(AlertKind::CrossAssetAnomaly),
+            _ => None,
+        }
+    }
 }
 
 /// Напрям руху.
