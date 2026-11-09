@@ -1,0 +1,103 @@
+# Приклад конфігурації Wallet Radar Alerts Bot.
+#
+# Секретів тут немає: у TOML — лише ІМЕНА змінних оточення. Значення читаються
+# з оточення, тому цей файл можна комітити в git, а `.env` — ні.
+#
+# Запуск:  TELEGRAM_BOT_TOKEN=... WR_PASSWORD=... ./bot config.toml
+
+[bot]
+name = "wallet-radar-alerts"
+# Ім'я змінної оточення з токеном Telegram. Токен НІКОМУ не пиши в цей файл.
+token_env = "TELEGRAM_BOT_TOKEN"
+default_language = "uk"          # uk | en
+default_timezone = "Europe/Kyiv"
+poll_timeout_secs = 25
+heartbeat_timeout_secs = 90
+log_level = "info"
+# Секрет для HMAC-підписів chat_ref у логах: у лог потрапляє хеш, а не chat_id.
+ref_secret_env = "BOT_REF_SECRET"
+
+[telegram]
+# Перевизначення адреси Telegram API. Потрібне лише для тестів і моків;
+# у продакшні — порожньо.
+api_url = ""
+
+[wr]
+base_url = "http://127.0.0.1:3000"
+username = "admin"
+# Пароль читача Wallet Radar — те саме, що для веб-доступу.
+password_env = "WR_PASSWORD"
+poll_interval_secs = 60          # як часто брати зріз агрегатів
+event_poll_interval_secs = 15    # страхувальний опитування подій
+request_timeout_secs = 20
+ws_path = "/ws"
+
+[storage]
+backend = "sqlite"               # sqlite | postgres
+sqlite_path = "data/bot.db"
+busy_timeout_ms = 5000
+
+[privacy]
+mask = "приховано"
+redact_ens = true
+redact_explorer_urls = true
+redact_base58 = true
+# Свої explorer'и, якщо з'являться.
+extra_blocked_domains = []
+
+[rate_limits]
+per_user_per_min = 20
+admin_per_min = 60
+global_inbound_per_min = 200
+telegram_global_per_sec = 25      # ліміт Telegram — 30/с
+telegram_per_chat_min_interval_ms = 1050  # ліміт Telegram — 1/с на чат
+max_pending_per_chat = 20
+
+[broadcast]
+# Скільки відсотків користувачів мають отримати той самий сигнал, щоб він
+# згорнувся у зведений дайджест замість тисячі окремих повідомлень.
+digest_threshold_pct = 25
+digest_window_secs = 300
+# Скільки хвилин буферизувати алерти, поки джерело недоступне.
+max_backlog_minutes = 30
+
+[admin]
+usernames = []                    # порожньо = адмінських команд немає
+access_code_env = "BOT_ACCESS_CODE"  # порожньо або не задано = /start без коду
+
+[features]
+# Асистент на основі /api/ask вимкнено: LLM може процитувати сирі дані.
+assistant = false
+
+# Пороги алертів. Якщо список порожній — бот бере дефолтні правила.
+[[alerts.rules]]
+kind = "whale_accumulation"       # whale_accumulation | whale_distribution | liquidation_spike | cross_asset_anomaly
+min_participants = 3
+min_total_value_usd = 20000
+windows = ["15m", "1h"]
+assets = []                       # порожньо = усі активи
+severity = "medium"               # info | medium | high
+
+[[alerts.rules]]
+kind = "whale_distribution"
+min_participants = 3
+min_total_value_usd = 20000
+windows = ["1h"]
+assets = []
+severity = "medium"
+
+[[alerts.rules]]
+kind = "liquidation_spike"
+min_participants = 1
+min_total_value_usd = 250000
+windows = ["1h"]
+assets = []
+severity = "high"
+
+[[alerts.rules]]
+kind = "cross_asset_anomaly"
+min_participants = 10
+min_total_value_usd = 0
+windows = ["1h"]
+assets = []
+severity = "info"

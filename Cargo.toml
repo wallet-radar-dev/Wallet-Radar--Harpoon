@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/privacy-filter",
+    "crates/storage",
+    "crates/wr-client",
+    "crates/alert-engine",
+    "crates/broadcast",
+    "crates/user-session",
+    "crates/telegram-gateway",
+    "crates/admin",
+    "bot",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "Proprietary"
+
+[workspace.dependencies]
+privacy-filter = { path = "crates/privacy-filter" }
+storage = { path = "crates/storage" }
+wr-client = { path = "crates/wr-client" }
+alert-engine = { path = "crates/alert-engine" }
+broadcast = { path = "crates/broadcast" }
+user-session = { path = "crates/user-session" }
+telegram-gateway = { path = "crates/telegram-gateway" }
+admin = { path = "crates/admin" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+toml = "0.8"
+regex = "1"
+unicode-normalization = "0.1"
+teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
