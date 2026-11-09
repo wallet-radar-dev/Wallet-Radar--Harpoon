@@ -125,6 +125,7 @@ fn router(store: SqliteStore) -> TestRouter {
             access_code: None,
             admins: vec!["tester".into()],
             rate_limits: (20, 60, 200),
+            poll_health: None,
         },
     )
 }

@@ -191,6 +191,7 @@ async fn no_wallet_address_or_transaction_ever_leaves_the_bot() {
             access_code: None,
             admins: vec!["tester".into()],
             rate_limits: (20, 60, 200),
+            poll_health: None,
         },
     );
 

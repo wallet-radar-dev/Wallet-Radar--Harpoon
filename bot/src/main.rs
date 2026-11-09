@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use storage::{SqliteStore, Store};
 use telegram_gateway::{
-    Router, RouterConfig, SnapshotCell, TeloxideNotifier, TeloxidePoller, UpdateSource,
+    PollHealth, PollState, Router, RouterConfig, SnapshotCell, TeloxideNotifier, TeloxidePoller,
+    UpdateSource,
 };
 use teloxide::Bot;
 use user_session::UserSession;
@@ -193,6 +194,10 @@ async fn main() -> anyhow::Result<()> {
     }
     let notifier = TeloxideNotifier::new(bot.clone());
     let poller = TeloxidePoller::new(bot, cfg.bot.poll_timeout_secs as u32);
+    // Стан опитування Telegram: показується в `/stats` і дозволяє
+    // повідомити адмінів, коли команди не обробляються через конфлікт
+    // поллерів (у цей час `/stats` недоступний).
+    let poll_health = Arc::new(PollHealth::new());
 
     // ─── Джерело ───────────────────────────────────────────────────
     let wr = WrClient::with_timeout(
@@ -255,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
                 false => cfg.env(&cfg.admin.access_code_env).ok(),
             },
             admins,
+            poll_health: Some(poll_health.clone()),
         },
     ));
 
@@ -345,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
                     heartbeat_ms: cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
                     conflict_policy: cfg.bot.poll_conflict_policy,
                     conflict_retry_secs: cfg.bot.poll_conflict_retry_secs.max(10),
+                    health: poll_health.clone(),
                 },
             )
             .await
@@ -515,6 +522,50 @@ struct PollCfg {
     conflict_policy: PollConflictPolicy,
     /// Пауза між повторами опитування після 409.
     conflict_retry_secs: u64,
+    /// Стан опитування — спільний із роутером (показ у `/stats`).
+    health: Arc<PollHealth>,
+}
+
+/// Мінімальна тривалість конфлікту, з якої про нього варто повідомляти
+/// адмінам: короткий збій — це нормальна річ, довгий — проблема.
+const CONFLICT_NOTICE_MIN_MS: i64 = 120_000;
+/// Не частіше ніж раз на 15 хвилин — конфлікт може «миготіти», і адмін
+/// не має отримувати по десять повідомлень за хвилину.
+const POLL_NOTICE_COOLDOWN_MS: i64 = 15 * 60_000;
+
+/// Повідомити адмінів про зміну стану опитування.
+///
+/// Під час конфлікту поллерів сам `/stats` не надійде — сказати про проблему
+/// можна лише окремим повідомленням.
+async fn notify_poll_state(
+    store: &SqliteStore,
+    broadcaster: &Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+    state: PollState,
+) {
+    let text = match state {
+        PollState::Conflict => {
+            "⚠️ Telegram: на токені вже працює інший поллер (409).\n\
+             Команди бота не обробляються; алерти й далі доставляються.\n\
+             Повтор спроби — щохвилини."
+        }
+        PollState::Healthy => "✅ Telegram: опитування відновилося — команди знову працюють.",
+        _ => return,
+    };
+    let users = match store.list_users().await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!(error = %e, "не вдалося отримати список адмінів для сповіщення");
+            return;
+        }
+    };
+    for u in users {
+        if u.role != storage::Role::Admin || u.muted || u.blocked {
+            continue;
+        }
+        if let Err(e) = broadcaster.reply(u.chat_id, text).await {
+            tracing::warn!(error = %e, chat = u.chat_id, "не вдалося повідомити адміна");
+        }
+    }
 }
 
 /// Цикл поллінгу Telegram.
@@ -540,6 +591,8 @@ async fn telegram_loop(
     // Чи вже повідомляли про конфлікт поллерів: повторні 409 не повинні
     // засмічувати журнал помилками.
     let mut conflict_reported = false;
+    // Коли останнього разу надсилали адмінам повідомлення про стан.
+    let mut last_notice_ms = 0i64;
 
     while !stop.load(Ordering::Relaxed) {
         // Опитування перериваємо на зупинці: інакше процес чекатиме на
@@ -559,6 +612,20 @@ async fn telegram_loop(
         match polled {
             Ok(updates) => {
                 backoff = Duration::from_secs(1);
+                // Стан опитування: успішний poll — значить, команди працюють.
+                let prev = cfg.health.state();
+                let prev_since = cfg.health.since_ms();
+                let now = now_ms();
+                cfg.health.mark_ok(now);
+                if prev == PollState::Conflict
+                    && now - prev_since >= CONFLICT_NOTICE_MIN_MS
+                    && now - last_notice_ms >= POLL_NOTICE_COOLDOWN_MS
+                {
+                    // Конфлікт був не миготінням — кажу адмінам, що все
+                    // налагодилося.
+                    last_notice_ms = now;
+                    notify_poll_state(&store, &broadcaster, PollState::Healthy).await;
+                }
                 if updates.is_empty() {
                     let silent = now_ms() - last_update_ms;
                     // Попереджаємо не частіше ніж раз на хвилину — інакше
@@ -615,6 +682,15 @@ async fn telegram_loop(
                 //     збір даних, згортання й доставку алертів лишити
                 //     працювати. Опитування повторюється автоматично, тож
                 //     коли конфлікт зникне, оживе й обробка команд.
+                let now = now_ms();
+                let changed = cfg.health.set(PollState::Conflict, now);
+                if changed && now - last_notice_ms >= POLL_NOTICE_COOLDOWN_MS {
+                    // Новий епізод конфлікту — кажу адмінам: під час
+                    // конфлікту `/stats` недоступний, тож повідомлення —
+                    // єдиний спосіб дізнатися про причину.
+                    last_notice_ms = now;
+                    notify_poll_state(&store, &broadcaster, PollState::Conflict).await;
+                }
                 if cfg.conflict_policy == PollConflictPolicy::Exit {
                     tracing::error!(
                         "Telegram відповів 409: на цьому токені вже працює інший полер. \
@@ -651,11 +727,13 @@ async fn telegram_loop(
                 continue;
             }
             Err(telegram_gateway::PollerError::InvalidToken(msg)) => {
+                cfg.health.set(PollState::Error, now_ms());
                 tracing::error!(%msg, "некоректний токен Telegram — зупиняюсь");
                 stop.store(true, Ordering::Relaxed);
                 return Err(anyhow::anyhow!("некоректний токен Telegram: {msg}"));
             }
             Err(e) => {
+                cfg.health.set(PollState::Error, now_ms());
                 tracing::warn!(error = %e, "помилка поллінгу Telegram — повторю");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(60));
@@ -786,9 +864,11 @@ async fn event_loop(
                 broadcaster,
                 store,
                 health,
-                poll_interval,
-                stop,
-                shutdown_rest,
+                RestPollCfg {
+                    interval: poll_interval,
+                    stop,
+                    shutdown: shutdown_rest,
+                },
             )
             .await
         })
@@ -866,6 +946,13 @@ async fn ws_loop(
     }
 }
 
+/// Параметри REST-страховки подій.
+struct RestPollCfg {
+    interval: Duration,
+    stop: Arc<AtomicBool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+}
+
 /// REST-страховка: відновлення подій після розриву й заповнення дірок.
 async fn rest_poll_loop(
     wr: WrClient,
@@ -873,10 +960,13 @@ async fn rest_poll_loop(
     broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
     store: SqliteStore,
     health: Arc<Health>,
-    interval: Duration,
-    stop: Arc<AtomicBool>,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    cfg: RestPollCfg,
 ) {
+    let RestPollCfg {
+        interval,
+        stop,
+        mut shutdown,
+    } = cfg;
     while !stop.load(Ordering::Relaxed) {
         // Пауза теж переривається зупинкою — щоб процес завершувався
         // одразу, а не чекав на повний інтервал.
