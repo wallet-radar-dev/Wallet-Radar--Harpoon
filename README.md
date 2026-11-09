@@ -139,8 +139,9 @@ TELEGRAM_BOT_TOKEN=dummy WR_PASSWORD=... ./target/release/bot config.toml
 
 ```bash
 # перенести підписників зі старого серверного реєстру в БД нового бота
-./target/release/import-registry /opt/wallet-tracker/dataset/telegram-users.json \
-    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db
+./target/release/import-registry \
+    /opt/wallet-tracker/dataset/telegram-users.json \
+    /opt/wallet-radar-alerts-bot/data/bot.db
 ```
 
 ### systemd
@@ -178,8 +179,9 @@ journalctl -u wallet-radar-alerts-bot -f
 sudo systemctl disable --now wallet-radar-bot.service
 
 # 2. перенести підписників
-./target/release/import-registry /opt/wallet-tracker/dataset/telegram-users.json \
-    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db
+./target/release/import-registry \
+    /opt/wallet-tracker/dataset/telegram-users.json \
+    /opt/wallet-radar-alerts-bot/data/bot.db
 
 # 3. новий сервіс
 sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
