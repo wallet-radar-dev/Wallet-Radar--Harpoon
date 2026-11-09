@@ -14,8 +14,9 @@
 use alert_engine::{Alert, AlertKey, AlertKind, AssetLabel, Direction, Metrics, Severity, Window};
 use broadcast::{BroadcastConfig, Broadcaster, Notifier, Outbound};
 use privacy_filter::PrivacyFilter;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use storage::{Language, NewUser, Priority, Role, SqliteStore, Store, Topic};
 
 /// Відправник, що записує все, що пішло б у Telegram.
@@ -340,4 +341,56 @@ async fn буфер_не_зʼїдає_пріоритетів_і_лишаєтьс
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].priority, Priority::Broadcast);
     assert_eq!(rows[0].status.as_str(), "sending");
+}
+
+#[tokio::test]
+async fn воркер_скидає_прострочене_до_відправлення() {
+    // Регресія, знайдена на живих даних: якщо перевіряти межу буфера
+    // рідко (раз на 30 с), прострочена доставка встигає вийти з черги й
+    // піти користувачеві на один цикл раніше, ніж її скинуть. Тому межа
+    // перевіряється **перед** відбором, на кожному кроці воркера.
+    let store = SqliteStore::open_in_memory().expect("БД");
+    user_with_topic(&store, 1, Topic::Whale).await;
+
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    // Межа — 1 хвилина.
+    let b = broadcaster(store.clone(), sent.clone(), 1);
+
+    // Одна свіжа доставка й одна прострочена (10 хв тому).
+    b.publish(&alert_at(
+        AlertKind::WhaleAccumulation,
+        "SOL",
+        "fresh",
+        now_ms(),
+    ))
+    .await
+    .expect("publish fresh");
+    b.publish(&alert_at(
+        AlertKind::WhaleAccumulation,
+        "SOL",
+        "stale",
+        now_ms() - 10 * 60_000,
+    ))
+    .await
+    .expect("publish stale");
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let b = b.clone();
+        let stop = stop.clone();
+        tokio::spawn(async move { b.run_worker(stop).await })
+    };
+    tokio::time::sleep(Duration::from_millis(2_000)).await;
+    stop.store(true, Ordering::Relaxed);
+    let _ = worker.await;
+
+    let messages = sent.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(messages.len(), 1, "повинно піти лише свіже");
+    assert!(
+        !messages[0].contains("stale"),
+        "прострочене не має відправлятися: {}",
+        messages[0]
+    );
+    assert_eq!(b.stats().messages_expired, 1, "прострочене скинуто");
+    assert_eq!(b.stats().messages_sent, 1, "свіже надіслано");
 }

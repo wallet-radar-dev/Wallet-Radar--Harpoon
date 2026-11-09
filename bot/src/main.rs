@@ -682,7 +682,16 @@ async fn snapshot_loop(
     while !stop.load(Ordering::Relaxed) {
         match wr.snapshot().await {
             Ok(snap) => {
-                source.recovered();
+                // Секції зрізу деградують у порожні, тож сам зріз майже
+                // ніколи не падає. Про доступність джерело каже окремо.
+                if snap.source_reachable {
+                    source.recovered();
+                } else if source.failed(now_ms()) {
+                    tracing::warn!(
+                        "джерело недоступне понад {} с — черга розсилки буферизується",
+                        SOURCE_DEGRADED_AFTER_SECS
+                    );
+                }
                 health.last_snapshot_ms.store(now_ms(), Ordering::Relaxed);
                 snapshot_cell.set(snap.clone());
                 if let Ok(payload) = serde_json::to_string(&snap) {
@@ -690,6 +699,8 @@ async fn snapshot_loop(
                 }
                 let alerts = {
                     let mut e = engine.lock().unwrap_or_else(|err| err.into_inner());
+                    // Джерело не відповіло — алерти з цього зрізу неповні.
+                    e.set_degraded(!snap.source_reachable);
                     e.apply_snapshot(&snap)
                 };
                 publish_all(&broadcaster, &alerts).await;
