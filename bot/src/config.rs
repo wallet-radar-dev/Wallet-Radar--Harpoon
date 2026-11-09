@@ -64,6 +64,29 @@ pub struct BotConfig {
     pub log_level: String,
     /// Ім'я змінної з секретом для HMAC-підписів chat_ref у логах.
     pub ref_secret_env: String,
+    /// Що робити, коли Telegram відповів 409 (на токені вже працює
+    /// інший полер).
+    ///
+    /// * `keep_running` — зупинити лише **опитування команд**; решта бота
+    ///   (збір даних, згортання, доставка алертів) продовжує працювати.
+    ///   Опитування автоматично повторюється, тож коли конфлікт зникне,
+    ///   команди знову оброблятимуться.
+    /// * `exit` — завершити процес: нічого не дублюємо, але й нічого не
+    ///   надсилаємо.
+    pub poll_conflict_policy: PollConflictPolicy,
+    /// Пауза між повторами опитування після 409 (політика `keep_running`).
+    pub poll_conflict_retry_secs: u64,
+}
+
+/// Політика поведінки при конфлікті поллерів на токені.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PollConflictPolicy {
+    /// Зупинити опитування, решта бота працює.
+    #[default]
+    KeepRunning,
+    /// Завершити процес.
+    Exit,
 }
 
 impl Default for BotConfig {
@@ -77,6 +100,8 @@ impl Default for BotConfig {
             heartbeat_timeout_secs: 90,
             log_level: "info".into(),
             ref_secret_env: "BOT_REF_SECRET".into(),
+            poll_conflict_policy: PollConflictPolicy::default(),
+            poll_conflict_retry_secs: 60,
         }
     }
 }

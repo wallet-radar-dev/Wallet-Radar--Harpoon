@@ -12,7 +12,8 @@
 
 use alert_engine::{Alert, AlertKind, Rule, Severity, Window};
 use anyhow::Context;
-use bot::{config::Config, registry};
+use bot::config::{Config, PollConflictPolicy};
+use bot::registry;
 use broadcast::{BroadcastConfig, Broadcaster};
 use privacy_filter::PrivacyFilter;
 use std::path::Path;
@@ -266,7 +267,11 @@ async fn main() -> anyhow::Result<()> {
                 shutdown_poll,
                 // Тут — у мілісекундах: порівнюємо з «тиша Telegram», а не з
                 // тривалістю поллінгу.
-                cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
+                PollCfg {
+                    heartbeat_ms: cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
+                    conflict_policy: cfg.bot.poll_conflict_policy,
+                    conflict_retry_secs: cfg.bot.poll_conflict_retry_secs.max(10),
+                },
             )
             .await
             {
@@ -424,6 +429,16 @@ type AppRouter = Router<
     admin::Admin<SqliteStore, Arc<Broadcaster<SqliteStore, Notifier_>>>,
 >;
 
+/// Налаштування циклу поллінгу Telegram.
+struct PollCfg {
+    /// Поріг «тиші Telegram» (epoch-мс), після якого пишемо попередження.
+    heartbeat_ms: u64,
+    /// Політика поведінки при конфлікті поллерів на токені.
+    conflict_policy: PollConflictPolicy,
+    /// Пауза між повторами опитування після 409.
+    conflict_retry_secs: u64,
+}
+
 /// Цикл поллінгу Telegram.
 async fn telegram_loop(
     store: SqliteStore,
@@ -432,7 +447,7 @@ async fn telegram_loop(
     poller: TeloxidePoller,
     stop: Arc<AtomicBool>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
-    cfg_heartbeat_ms: u64,
+    cfg: PollCfg,
 ) -> Result<(), anyhow::Error> {
     let mut last_update_ms = now_ms();
     let mut last_warn_ms = now_ms();
@@ -444,6 +459,9 @@ async fn telegram_loop(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let mut backoff = Duration::from_secs(1);
+    // Чи вже повідомляли про конфлікт поллерів: повторні 409 не повинні
+    // засмічувати журнал помилками.
+    let mut conflict_reported = false;
 
     while !stop.load(Ordering::Relaxed) {
         // Опитування перериваємо на зупинці: інакше процес чекатиме на
@@ -467,7 +485,7 @@ async fn telegram_loop(
                     let silent = now_ms() - last_update_ms;
                     // Попереджаємо не частіше ніж раз на хвилину — інакше
                     // «тиша Telegram» перетвориться на спам у лозі.
-                    if silent > cfg_heartbeat_ms as i64 && now_ms() - last_warn_ms > 60_000 {
+                    if silent > cfg.heartbeat_ms as i64 && now_ms() - last_warn_ms > 60_000 {
                         last_warn_ms = now_ms();
                         tracing::warn!(
                             silent_ms = silent,
@@ -513,17 +531,46 @@ async fn telegram_loop(
                 }
             }
             Err(telegram_gateway::PollerError::Conflict) => {
-                tracing::error!(
-                    "Telegram відповів 409: на цьому токені вже працює інший полер. \
-                     Другий бот на тому самому токені запускати не можна — зупиняюсь."
-                );
-                stop.store(true, Ordering::Relaxed);
-                // Помилка, а не штатний вихід: systemd підніме бота ще раз
-                // (обмежена кількість спроб). 409 буває й тимчасовим — наприклад,
-                // коли попередній інстанс ще не відпустив з'єднання.
-                return Err(anyhow::anyhow!(
-                    "409 Conflict: на токені вже працює інший полер Telegram"
-                ));
+                // На токені вже працює інший полер. Два варіанти:
+                //   * exit — завершити процес (суворіше: нічого не дублюємо);
+                //   * keep_running — призупинити лише опитування команд, а
+                //     збір даних, згортання й доставку алертів лишити
+                //     працювати. Опитування повторюється автоматично, тож
+                //     коли конфлікт зникне, оживе й обробка команд.
+                if cfg.conflict_policy == PollConflictPolicy::Exit {
+                    tracing::error!(
+                        "Telegram відповів 409: на цьому токені вже працює інший полер. \
+                         Політика poll_conflict_policy=exit — зупиняюсь."
+                    );
+                    stop.store(true, Ordering::Relaxed);
+                    return Err(anyhow::anyhow!(
+                        "409 Conflict: на токені вже працює інший полер Telegram"
+                    ));
+                }
+                if !conflict_reported {
+                    conflict_reported = true;
+                    tracing::error!(
+                        "Telegram відповів 409: на цьому токені вже працює інший полер. \
+                         Опитування команд призупинено; збір даних і доставка алертів \
+                         продовжуються. Повтор опитування через {} с.",
+                        cfg.conflict_retry_secs
+                    );
+                } else {
+                    tracing::warn!(
+                        "опитування Telegram все ще недоступне (409) — повтор через {} с",
+                        cfg.conflict_retry_secs
+                    );
+                }
+                // Пауза перед наступною спробою: інакше отримаємо 409 у циклі
+                // і засмимо журнал та ліміт Telegram.
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(cfg.conflict_retry_secs)) => {}
+                    _ = shutdown.changed() => {
+                        tracing::info!("опитування Telegram перервано зупинкою");
+                        return Ok(());
+                    }
+                }
+                continue;
             }
             Err(telegram_gateway::PollerError::InvalidToken(msg)) => {
                 tracing::error!(%msg, "некоректний токен Telegram — зупиняюсь");
