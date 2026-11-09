@@ -37,6 +37,64 @@ struct Health {
     gap_detected: AtomicI64,
 }
 
+/// Стан доступності джерела: поки воно недоступне, черга розсилки
+/// **буферизується** (див. `docs/ARCHITECTURE.md` §8.3).
+///
+/// Логіка — з того самого розділу: `degraded` настає, коли REST джерела
+/// недоступний понад 2 хвилини; далі черга тримає алерти, а якщо джерело не
+/// ожило за межу буфера (`max_backlog_minutes`) — накопичене скидається.
+struct SourceState {
+    /// `false` — джерело недоступне, черга буферизується.
+    gate: Arc<AtomicBool>,
+    /// Коли джерело стало недоступним (epoch-мс); `0` — джерело доступне.
+    down_since_ms: AtomicI64,
+}
+
+/// Скільки секунд джерело має бути недоступним, щоб це вважалося зббоєм,
+/// а не коротким hiccup (§8.3: «REST недоступний > 2 хв»).
+const SOURCE_DEGRADED_AFTER_SECS: i64 = 120;
+
+impl SourceState {
+    fn new(gate: Arc<AtomicBool>) -> SourceState {
+        SourceState {
+            gate,
+            down_since_ms: AtomicI64::new(0),
+        }
+    }
+
+    /// Джерело відповіло: буфер розблоковано.
+    fn recovered(&self) {
+        let was_down = self.down_since_ms.swap(0, Ordering::Relaxed);
+        self.gate.store(true, Ordering::Relaxed);
+        if was_down > 0 {
+            tracing::info!(
+                down_ms = now_ms() - was_down,
+                "джерело ожило — буфер розсилки випускаємо"
+            );
+        }
+    }
+
+    /// Зріз не вдався. Повертає `true`, якщо джерело **щойно** перейшло у
+    /// «недоступне» — тоді про перехід варто залогувати один раз.
+    fn failed(&self, now: i64) -> bool {
+        let since = self.down_since_ms.load(Ordering::Relaxed);
+        let since = if since == 0 {
+            self.down_since_ms.store(now, Ordering::Relaxed);
+            now
+        } else {
+            since
+        };
+        // `swap` повертає попереднє значення: `true` → ми саме зараз
+        // перемикали гейт, тож перехід треба залогувати.
+        if now - since >= SOURCE_DEGRADED_AFTER_SECS * 1000
+            && self.gate.swap(false, Ordering::SeqCst)
+        {
+            return true;
+        }
+        false
+    }
+}
+
 impl Health {
     fn new() -> Health {
         Health {
@@ -158,6 +216,8 @@ async fn main() -> anyhow::Result<()> {
         // Згортання «широких» сигналів у зведений дайджест.
         digest_threshold_pct: cfg.broadcast.digest_threshold_pct,
         digest_window_secs: cfg.broadcast.digest_window_secs,
+        // Межа буфера черги: скільки хвилин доставка може чекати.
+        max_backlog_minutes: cfg.broadcast.max_backlog_minutes,
         ..BroadcastConfig::default()
     };
     let broadcaster = Arc::new(Broadcaster::new(
@@ -166,6 +226,8 @@ async fn main() -> anyhow::Result<()> {
         sanitizer.clone(),
         bcfg,
     ));
+    // Стан джерела: цикл зрізів керує ним, воркер розсилки — читає.
+    let source_state = Arc::new(SourceState::new(broadcaster.source_gate()));
 
     // ─── Сесії, адмінка, роутер ────────────────────────────────────
     let session = UserSession::new(store.clone());
@@ -207,6 +269,9 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let shutdown_poll = shutdown_rx.clone();
     let shutdown_events = shutdown_rx.clone();
+    let shutdown_snapshot = shutdown_rx.clone();
+    let shutdown_registry = shutdown_rx.clone();
+    let shutdown_rest = shutdown_rx.clone();
 
     // Чесно кажемо, які ручки ще не задіяні: краще попередження в лозі, ніж
     // тихий параметр, який нічого не робить.
@@ -221,6 +286,14 @@ async fn main() -> anyhow::Result<()> {
         );
     } else {
         tracing::info!("згортання сигналів у зведений дайджест вимкнено");
+    }
+    if cfg.broadcast.max_backlog_minutes > 0 {
+        tracing::info!(
+            max_backlog_minutes = cfg.broadcast.max_backlog_minutes,
+            "черга розсилки буферизується, поки джерело недоступне; старіші за межу доставки скидаються"
+        );
+    } else {
+        tracing::info!("межа буфера вимкнена — черга розсилки безстрокова");
     }
 
     tracing::info!(
@@ -245,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => {
             tracing::warn!(error = %e, "початковий зріз не вдався — працюємо в degraded");
             health.degraded.store(true, Ordering::Relaxed);
+            source_state.failed(now_ms());
         }
     }
 
@@ -295,6 +369,7 @@ async fn main() -> anyhow::Result<()> {
         let health = health.clone();
         let store = store.clone();
         let stop = stop.clone();
+        let source = source_state.clone();
         let interval = Duration::from_secs(cfg.wr.poll_interval_secs.max(5));
         tasks.push(tokio::spawn(async move {
             snapshot_loop(
@@ -304,8 +379,10 @@ async fn main() -> anyhow::Result<()> {
                 snapshot_cell,
                 health,
                 store,
+                source,
                 interval,
                 stop,
+                shutdown_snapshot,
             )
             .await
         }));
@@ -332,6 +409,7 @@ async fn main() -> anyhow::Result<()> {
                 poll_interval,
                 stop,
                 shutdown_events,
+                shutdown_rest,
             )
             .await
         }));
@@ -363,7 +441,7 @@ async fn main() -> anyhow::Result<()> {
             let stop = stop.clone();
             let interval = Duration::from_secs(cfg.wr.registry_sync_interval_secs.max(15));
             tasks.push(tokio::spawn(async move {
-                sync.run(interval, stop).await;
+                sync.run(interval, stop, shutdown_registry).await;
             }));
         }
     }
@@ -596,12 +674,15 @@ async fn snapshot_loop(
     snapshot_cell: Arc<SnapshotCell>,
     health: Arc<Health>,
     store: SqliteStore,
+    source: Arc<SourceState>,
     interval: Duration,
     stop: Arc<AtomicBool>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
         match wr.snapshot().await {
             Ok(snap) => {
+                source.recovered();
                 health.last_snapshot_ms.store(now_ms(), Ordering::Relaxed);
                 snapshot_cell.set(snap.clone());
                 if let Ok(payload) = serde_json::to_string(&snap) {
@@ -617,11 +698,28 @@ async fn snapshot_loop(
             Err(e) => {
                 tracing::warn!(error = %e, "зріз джерела недоступний");
                 health.degraded.store(true, Ordering::Relaxed);
+                // Джерело недоступне понад grace-період — черга буферизується:
+                // алерти чекають, поки джерело оживе (або їх скине межа буфера).
+                if source.failed(now_ms()) {
+                    tracing::warn!(
+                        "джерело недоступне понад {} с — черга розсилки буферизується",
+                        SOURCE_DEGRADED_AFTER_SECS
+                    );
+                }
                 let mut e = engine.lock().unwrap_or_else(|err| err.into_inner());
                 e.set_degraded(true);
             }
         }
-        tokio::time::sleep(interval).await;
+        // Пауза між зрізами переривається зупинкою: інакше процес чекав би
+        // на неї до 60 секунд, systemd вбив би його — і «мертвий» процес
+        // залишив би після себе некоректний WAL.
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = shutdown.changed() => {
+                tracing::info!("цикл зрізів перервано зупинкою");
+                return;
+            }
+        }
     }
 }
 
@@ -637,6 +735,7 @@ async fn event_loop(
     poll_interval: Duration,
     stop: Arc<AtomicBool>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    shutdown_rest: tokio::sync::watch::Receiver<bool>,
 ) {
     // Водночас: WS-споживач і REST-страховка. Дублікати не страшні — дедуп за
     // `seen_events`.
@@ -670,7 +769,17 @@ async fn event_loop(
         let health = health.clone();
         let stop = stop.clone();
         tokio::spawn(async move {
-            rest_poll_loop(wr, engine, broadcaster, store, health, poll_interval, stop).await
+            rest_poll_loop(
+                wr,
+                engine,
+                broadcaster,
+                store,
+                health,
+                poll_interval,
+                stop,
+                shutdown_rest,
+            )
+            .await
         })
     };
 
@@ -734,7 +843,14 @@ async fn ws_loop(
                 health.degraded.store(true, Ordering::Relaxed);
             }
         }
-        tokio::time::sleep(backoff).await;
+        // Пауза перед наступним підключенням теж переривається зупинкою.
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = shutdown.changed() => {
+                tracing::info!("стрічка подій перервана зупинкою");
+                return;
+            }
+        }
         backoff = (backoff * 2).min(Duration::from_secs(60));
     }
 }
@@ -748,9 +864,18 @@ async fn rest_poll_loop(
     health: Arc<Health>,
     interval: Duration,
     stop: Arc<AtomicBool>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        tokio::time::sleep(interval).await;
+        // Пауза теж переривається зупинкою — щоб процес завершувався
+        // одразу, а не чекав на повний інтервал.
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = shutdown.changed() => {
+                tracing::info!("REST-поллінг подій перервано зупинкою");
+                return;
+            }
+        }
         if stop.load(Ordering::Relaxed) {
             break;
         }

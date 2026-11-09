@@ -566,6 +566,17 @@ pub trait Store {
     ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>>;
     /// Фіксує результат спроби доставки.
     fn finish_delivery(&self, d: DeliveryUpdate) -> impl Future<Output = Result<(), StoreError>>;
+    /// Скинути доставки, що провисели в буфері довше за межу.
+    ///
+    /// Торкається лише `pending`: надіслані, пропущені й невдалі — вже
+    /// завершені, їх не чіпаємо. Повертає кількість скинутих рядків.
+    fn expire_pending_before(
+        &self,
+        cutoff_ms: i64,
+        reason: &str,
+    ) -> impl Future<Output = Result<usize, StoreError>>;
+    /// Скільки доставок чекає в черзі (буфер).
+    fn count_pending(&self) -> impl Future<Output = Result<i64, StoreError>>;
     /// Активні (не muted, не blocked) чати, які мають підписку на тему, — для розсилки.
     fn recipients_for(&self, topic: Topic) -> impl Future<Output = Result<Vec<i64>, StoreError>>;
     /// Кількість активних одержувачів.

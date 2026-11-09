@@ -71,6 +71,13 @@ pub struct BroadcastConfig {
     pub digest_threshold_pct: u32,
     /// Вікно згортання: раз на скільки секунд збирається один зведений дайджест.
     pub digest_window_secs: u64,
+    /// Межа буфера: скільки хвилин доставка може чекати в черзі.
+    ///
+    /// `0` — обмеження вимкнено (буфер безстроковий). Інакше доставка, яка
+    /// провисела в черзі довше за цю межу, скидається і **не надсилається
+    /// ніколи**: вікно агрегації застаріло, а «кит накопичував 2 години
+    /// тому» — це не інформація, а шум.
+    pub max_backlog_minutes: u32,
 }
 
 impl Default for BroadcastConfig {
@@ -87,6 +94,7 @@ impl Default for BroadcastConfig {
             poll_interval_ms: 500,
             digest_threshold_pct: 25,
             digest_window_secs: 300,
+            max_backlog_minutes: 30,
         }
     }
 }
@@ -205,6 +213,8 @@ pub struct BroadcastStats {
     pub messages_failed: u64,
     pub messages_retried: u64,
     pub messages_skipped: u64,
+    /// Скільки доставок скинуто за межею буфера (алерт застарів).
+    pub messages_expired: u64,
 }
 
 /// Згорнуті сигнали, що очікують зведення.
@@ -218,6 +228,9 @@ pub struct Broadcaster<S: Store, N: Notifier> {
     limiter: Arc<RateLimiter>,
     cfg: BroadcastConfig,
     stats: BroadcastStatsAtomic,
+    /// «Джерело доступне». Коли вимкнено — черга **буферизується**: нічого не
+    /// надсилається, поки джерело не оживе (див. `docs/ARCHITECTURE.md` §8.3).
+    source_gate: Arc<AtomicBool>,
 }
 
 /// Атомарні лічильники (щоб `Arc<Broadcaster>` ділився ними з воркером).
@@ -231,6 +244,7 @@ pub struct BroadcastStatsAtomic {
     pub messages_failed: AtomicU64,
     pub messages_retried: AtomicU64,
     pub messages_skipped: AtomicU64,
+    pub messages_expired: AtomicU64,
 }
 
 impl BroadcastStatsAtomic {
@@ -244,6 +258,7 @@ impl BroadcastStatsAtomic {
             messages_failed: self.messages_failed.load(Ordering::Relaxed),
             messages_retried: self.messages_retried.load(Ordering::Relaxed),
             messages_skipped: self.messages_skipped.load(Ordering::Relaxed),
+            messages_expired: self.messages_expired.load(Ordering::Relaxed),
         }
     }
 }
@@ -258,7 +273,21 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
             limiter,
             cfg,
             stats: BroadcastStatsAtomic::default(),
+            source_gate: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// Ручка стану джерела: `false` — джерело недоступне, черга буферизується.
+    ///
+    /// Клонується `Arc`, тож оркестратор (цикл зрізів) керує тим самим
+    /// станом, що й воркер розсилки.
+    pub fn source_gate(&self) -> Arc<AtomicBool> {
+        self.source_gate.clone()
+    }
+
+    /// Чи джерело зараз доступне (черга не буферизується).
+    pub fn source_available(&self) -> bool {
+        self.source_gate.load(Ordering::Relaxed)
     }
 
     pub fn store(&self) -> &S {
@@ -385,6 +414,11 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
     /// Повертає кількість поставлених у чергу доставок. Якщо вікно ще не
     /// минуло — нічого не робимо.
     pub async fn flush_digests(&self, now: i64) -> Result<usize, BroadcastError> {
+        // Джерело недоступне — не зливаємо: буфер згортання має пережити
+        // збій, а вікно вимірюється від найстарішого накопиченого сигналу.
+        if !self.source_available() {
+            return Ok(0);
+        }
         let window_ms = (self.cfg.digest_window_secs.max(1) as i64) * 1000;
         let pending = self.store.fold_pending_list().await?;
         if pending.is_empty() {
@@ -543,6 +577,12 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
 
     /// Один крок черги: забрати готове до відправки, надіслати, записати результат.
     pub async fn pump_once(&self, now: i64) -> Result<usize, BroadcastError> {
+        // Джерело недоступне — черга **буферизується**: нічого не
+        // відбираємо й нічого не надсилаємо. Коли джерело оживе, буфер
+        // вилиється сам (з перевіркою межі віку).
+        if !self.source_available() {
+            return Ok(0);
+        }
         let batch = self.store.claim_deliveries(now, 50).await?;
         let mut done = 0usize;
         for delivery in batch {
@@ -550,6 +590,41 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
             done += 1;
         }
         Ok(done)
+    }
+
+    /// Скинути доставки, що провисели в черзі (буфері) довше за межу.
+    ///
+    /// Межа — `max_backlog_minutes`. `0` — обмеження вимкнено: буфер
+    /// безстроковий. Скинуті доставки отримують статус `skipped` і
+    /// **не надсилаються ніколи**: вікно агрегації застаріло.
+    ///
+    /// Повертає кількість скинутих рядків.
+    pub async fn expire_backlog(&self, now: i64) -> Result<usize, BroadcastError> {
+        let minutes = self.cfg.max_backlog_minutes;
+        if minutes == 0 {
+            return Ok(0);
+        }
+        let cutoff = now - (minutes as i64) * 60_000;
+        let expired = self
+            .store
+            .expire_pending_before(cutoff, "буфер прострочено: алерт застарів")
+            .await?;
+        if expired > 0 {
+            self.stats
+                .messages_expired
+                .fetch_add(expired as u64, Ordering::Relaxed);
+            tracing::warn!(
+                expired,
+                max_backlog_minutes = minutes,
+                "буфер скинуто: алерти застаріли за межею"
+            );
+        }
+        Ok(expired)
+    }
+
+    /// Скільки доставок чекає в черзі (буфер).
+    pub async fn backlog_pending(&self) -> Result<i64, BroadcastError> {
+        Ok(self.store.count_pending().await?)
     }
 
     async fn deliver(&self, delivery: &Delivery, now: i64) -> Result<(), BroadcastError> {
@@ -649,8 +724,22 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
 
     /// Воркер черги: крутиться, поки не скажуть зупинитися.
     pub async fn run_worker(self: Arc<Self>, stop: Arc<AtomicBool>) {
+        let mut last_expire = alert_engine_now_ms();
         while !stop.load(Ordering::Relaxed) {
             let now = alert_engine_now_ms();
+            // Межа буфера перевіряється раз на 30 секунд: частіше — то
+            // марно смикати БД, рідше — прострочене могло б протриматися
+            // зайві пів-хвилини.
+            if now - last_expire >= BACKLOG_CHECK_INTERVAL_MS {
+                last_expire = now;
+                match self.expire_backlog(now).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::debug!(expired = n, "черга: скинуто застарілі доставки"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "черга: не вдалося перевірити межу буфера")
+                    }
+                }
+            }
             // Злиття зведених дайджестів — до відправки черги, щоб
             // зведення пішли разом з іншими повідомленнями.
             match self.flush_digests(now).await {
@@ -668,6 +757,9 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
         tracing::info!("воркер розсилки зупинено");
     }
 }
+
+/// Як часто воркер перевіряє межу буфера (мс).
+const BACKLOG_CHECK_INTERVAL_MS: i64 = 30_000;
 
 fn alert_engine_now_ms() -> i64 {
     std::time::SystemTime::now()

@@ -473,3 +473,86 @@ async fn alerts_since_returns_only_alerts_in_window_newest_first() {
     let rows = store.alerts_since(9_999).await.expect("alerts_since");
     assert!(rows.is_empty());
 }
+
+#[tokio::test]
+async fn expire_pending_before_skips_only_stale_pending_rows() {
+    let store = SqliteStore::open_in_memory().expect("відкриття БД");
+
+    // Стара доставка в буфері — має бути скинута.
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 10,
+            alert_key: "old".to_string(),
+            priority: Priority::Broadcast,
+            text: "t".to_string(),
+            created_at: 1_000,
+        })
+        .await
+        .expect("enqueue old");
+    // Свіжа — має лишитися.
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 11,
+            alert_key: "new".to_string(),
+            priority: Priority::Broadcast,
+            text: "t".to_string(),
+            created_at: 9_000,
+        })
+        .await
+        .expect("enqueue new");
+
+    assert_eq!(store.count_pending().await.expect("pending"), 2);
+
+    let expired = store
+        .expire_pending_before(5_000, "буфер прострочено")
+        .await
+        .expect("expire");
+    assert_eq!(expired, 1, "скинуто лише прострочене");
+    assert_eq!(store.count_pending().await.expect("pending"), 1);
+
+    // Скинута доставка більше не відбирається і не надсилається.
+    let claimed = store.claim_deliveries(20_000, 10).await.expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].alert_key, "new");
+
+    // Повторна перевірка нічого не скидає: скинуте вже не `pending`.
+    let again = store
+        .expire_pending_before(50_000, "буфер прострочено")
+        .await
+        .expect("expire again");
+    assert_eq!(again, 0);
+}
+
+#[tokio::test]
+async fn expire_pending_before_keeps_finished_deliveries() {
+    let store = SqliteStore::open_in_memory().expect("відкриття БД");
+
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 20,
+            alert_key: "done".to_string(),
+            priority: Priority::Broadcast,
+            text: "t".to_string(),
+            created_at: 1_000,
+        })
+        .await
+        .expect("enqueue");
+    store
+        .finish_delivery(DeliveryUpdate {
+            chat_id: 20,
+            alert_key: "done".to_string(),
+            status: DeliveryStatus::Sent,
+            attempts: 1,
+            next_attempt_at: 2_000,
+            error: None,
+        })
+        .await
+        .expect("finish");
+
+    // Надіслане не скидається: воно вже завершене.
+    let expired = store
+        .expire_pending_before(9_000, "буфер прострочено")
+        .await
+        .expect("expire");
+    assert_eq!(expired, 0);
+}

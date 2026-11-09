@@ -588,6 +588,35 @@ impl Store for SqliteStore {
         .await
     }
 
+    async fn expire_pending_before(
+        &self,
+        cutoff_ms: i64,
+        reason: &str,
+    ) -> Result<usize, StoreError> {
+        let reason = reason.to_string();
+        self.call(move |conn| {
+            // Тільки `pending`: решта статусів — уже завершені спроби.
+            let n = conn.execute(
+                "UPDATE deliveries
+                 SET status = 'skipped', next_attempt_at = ?1, last_error = ?2
+                 WHERE status = 'pending' AND created_at < ?3",
+                params![cutoff_ms, reason, cutoff_ms],
+            )?;
+            Ok(n)
+        })
+        .await
+    }
+
+    async fn count_pending(&self) -> Result<i64, StoreError> {
+        self.call(move |conn| {
+            let mut stmt =
+                conn.prepare("SELECT COUNT(*) FROM deliveries WHERE status = 'pending'")?;
+            let n: i64 = stmt.query_row([], |r| r.get(0))?;
+            Ok(n)
+        })
+        .await
+    }
+
     async fn recipients_for(&self, topic: Topic) -> Result<Vec<i64>, StoreError> {
         self.call(move |conn| {
             let mut stmt = conn.prepare(

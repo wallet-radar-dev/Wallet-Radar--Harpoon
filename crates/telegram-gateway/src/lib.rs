@@ -662,7 +662,7 @@ impl<S: Session, A: AdminService> Router<S, A> {
     async fn cmd_stats(&self) -> String {
         match self.admin.stats().await {
             Ok(s) => format!(
-                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}",
+                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}\n• буфер: {} у черзі · скинуто за межею: {}",
                 s.recipients,
                 s.alerts_published,
                 s.alerts_duplicate,
@@ -671,7 +671,9 @@ impl<S: Session, A: AdminService> Router<S, A> {
                 s.messages_sent,
                 s.messages_failed,
                 s.messages_retried,
-                s.messages_skipped
+                s.messages_skipped,
+                s.backlog_pending,
+                s.messages_expired
             ),
             Err(e) => format!("Не вдалося зібрати статистику: {e}"),
         }

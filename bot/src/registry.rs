@@ -110,10 +110,15 @@ impl<S: Store> RegistrySync<S> {
     }
 
     /// Фоновий цикл синхронізації.
+    ///
+    /// `shutdown` — канал зупинки: пауза між ітераціями переривається ним,
+    /// інакше процес чекав би на повний інтервал (60 с) і systemd вбив би
+    /// його на `TimeoutStopSec`.
     pub async fn run(
         self: Arc<Self>,
         interval: Duration,
         stop: Arc<std::sync::atomic::AtomicBool>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
         use std::sync::atomic::Ordering;
         let mut last_error: Option<String> = None;
@@ -136,7 +141,13 @@ impl<S: Store> RegistrySync<S> {
                     }
                 }
             }
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {}
+                _ = shutdown.changed() => {
+                    tracing::info!("цикл синхронізації реєстру перервано зупинкою");
+                    return;
+                }
+            }
         }
     }
 }
