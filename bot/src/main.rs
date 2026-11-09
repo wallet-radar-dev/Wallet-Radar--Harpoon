@@ -204,6 +204,8 @@ async fn main() -> anyhow::Result<()> {
     // Канал зупинки для поллера: довге опитування треба переривати, а не
     // чекати на нього до 25 секунд (див. обробку SIGTERM нижче).
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown_poll = shutdown_rx.clone();
+    let shutdown_events = shutdown_rx.clone();
 
     // Чесно кажемо, які ручки ще не задіяні: краще попередження в лозі, ніж
     // тихий параметр, який нічого не робить.
@@ -261,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
                 broadcaster,
                 poller,
                 stop,
-                shutdown_rx.clone(),
+                shutdown_poll,
                 // Тут — у мілісекундах: порівнюємо з «тиша Telegram», а не з
                 // тривалістю поллінгу.
                 cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
@@ -324,6 +326,7 @@ async fn main() -> anyhow::Result<()> {
                 ws_path,
                 poll_interval,
                 stop,
+                shutdown_events,
             )
             .await
         }));
@@ -586,6 +589,7 @@ async fn event_loop(
     ws_path: String,
     poll_interval: Duration,
     stop: Arc<AtomicBool>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     // Водночас: WS-споживач і REST-страховка. Дублікати не страшні — дедуп за
     // `seen_events`.
@@ -596,9 +600,19 @@ async fn event_loop(
         let store = store.clone();
         let health = health.clone();
         let stop = stop.clone();
-        tokio::spawn(
-            async move { ws_loop(wr, engine, broadcaster, store, health, ws_path, stop).await },
-        )
+        tokio::spawn(async move {
+            ws_loop(
+                wr,
+                engine,
+                broadcaster,
+                store,
+                health,
+                ws_path,
+                stop,
+                shutdown_rx.clone(),
+            )
+            .await
+        })
     };
 
     let poll_handle = {
@@ -627,6 +641,7 @@ async fn ws_loop(
     health: Arc<Health>,
     ws_path: String,
     stop: Arc<AtomicBool>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut backoff = Duration::from_secs(1);
     while !stop.load(Ordering::Relaxed) {
@@ -636,8 +651,17 @@ async fn ws_loop(
                 health.ws_connected.store(true, Ordering::Relaxed);
                 backoff = Duration::from_secs(1);
 
-                while !stop.load(Ordering::Relaxed) {
-                    match stream.next_message().await {
+                loop {
+                    // Очікування кадру теж переривається: інакше цикл
+                    // висить на WS-з'єднанні й процес не завершується.
+                    let frame = tokio::select! {
+                        f = stream.next_message() => f,
+                        _ = shutdown.changed() => {
+                            tracing::info!("стрічка подій перервана зупинкою");
+                            return;
+                        }
+                    };
+                    match frame {
                         Some(Ok(ServerMsg::Init { events })) => {
                             tracing::info!(count = events.len(), "init-кадр стрічки");
                             ingest(&store, &engine, &broadcaster, &health, events).await;
