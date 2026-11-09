@@ -144,6 +144,27 @@ TELEGRAM_BOT_TOKEN=dummy WR_PASSWORD=... ./target/release/bot config.toml
     /opt/wallet-radar-alerts-bot/data/bot.db
 ```
 
+### Розсилка оголошення всім підписникам
+
+Одноразовий інструмент `send-notice` ставить ручний алерт у чергу доставок —
+те саме, що команда `/broadcast`, але без залежності від сесії адміністратора
+в Telegram. Повідомлення проходить фільтр приватності, потрапляє в аудит, а
+**надсилає воркер запущеного сервісу** — отже, ліміти, ретраї та
+ідемпотентність працюють ті самі.
+
+```bash
+# текст — у файлі
+cat > /tmp/notice.txt <<'EOF'
+📌 Уточнення до попередньої серії повідомлень
+...
+EOF
+
+sudo -u ubuntu /opt/wallet-radar-alerts-bot/bin/send-notice \
+    /opt/wallet-radar-alerts-bot/data/bot.db \
+    5801029420 vitalii_vedana /tmp/notice.txt
+# → поставлено в чергу доставок: 3
+```
+
 ### systemd
 
 ```bash
