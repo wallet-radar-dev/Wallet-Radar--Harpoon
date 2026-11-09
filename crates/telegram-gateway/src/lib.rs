@@ -19,6 +19,7 @@ use broadcast::{Notifier, Outbound, SendError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 
 use storage::{Language, NewUser, Role};
@@ -76,6 +77,109 @@ pub enum PollerError {
     Transient(String),
     #[error("некоректний токен: {0}")]
     InvalidToken(String),
+}
+
+/// Стан опитування Telegram.
+///
+/// Окремий тип — щоб стан поллера можна було показати адміну в `/stats` і
+/// повідомити про конфлікт: під час конфлікту сам `/stats` недоступний, тож
+/// сказати про нього можна лише окремим повідомленням.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PollState {
+    /// Опитування ще не починалося.
+    Unknown,
+    /// Опитування працює.
+    Healthy,
+    /// На токені вже працює інший поллер (409).
+    Conflict,
+    /// Тимчасова помилка опитування.
+    Error,
+}
+
+impl PollState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PollState::Unknown => "unknown",
+            PollState::Healthy => "healthy",
+            PollState::Conflict => "conflict",
+            PollState::Error => "error",
+        }
+    }
+
+    /// Людський опис для `/stats`.
+    pub fn describe(&self) -> &'static str {
+        match self {
+            PollState::Unknown => "ще не перевірено",
+            PollState::Healthy => "працюють",
+            PollState::Conflict => "недоступні — на токені вже працює інший поллер (409)",
+            PollState::Error => "недоступні — помилка опитування",
+        }
+    }
+}
+
+/// Стан опитування: спільний для поллера, роутера й `/stats`.
+///
+/// Атомарний — стан читають і пишуть різні цикли процесу.
+#[derive(Debug, Default)]
+pub struct PollHealth {
+    state: AtomicU8,
+    /// Коли стан змінився на поточний (epoch-мс).
+    since_ms: AtomicI64,
+    /// Коли опитування востаннє успішне (epoch-мс).
+    last_ok_ms: AtomicI64,
+}
+
+impl PollHealth {
+    pub fn new() -> PollHealth {
+        PollHealth::default()
+    }
+
+    /// Зафіксувати новий стан. Повертає `true`, якщо стан **змінився** —
+    /// щоб повідомлення адмінам не дублювалися на кожному повторі.
+    pub fn set(&self, state: PollState, now_ms: i64) -> bool {
+        let code = match state {
+            PollState::Unknown => 0u8,
+            PollState::Healthy => 1,
+            PollState::Conflict => 2,
+            PollState::Error => 3,
+        };
+        let prev = self.state.swap(code, Ordering::Relaxed);
+        if prev == code {
+            return false;
+        }
+        self.since_ms.store(now_ms, Ordering::Relaxed);
+        true
+    }
+
+    pub fn state(&self) -> PollState {
+        match self.state.load(Ordering::Relaxed) {
+            1 => PollState::Healthy,
+            2 => PollState::Conflict,
+            3 => PollState::Error,
+            _ => PollState::Unknown,
+        }
+    }
+
+    /// Коли поточний стан почався (epoch-мс).
+    pub fn since_ms(&self) -> i64 {
+        self.since_ms.load(Ordering::Relaxed)
+    }
+
+    /// Коли опитування востаннє успішне (epoch-мс).
+    pub fn last_ok_ms(&self) -> i64 {
+        self.last_ok_ms.load(Ordering::Relaxed)
+    }
+
+    /// Позначити успішне опитування.
+    pub fn mark_ok(&self, now_ms: i64) -> bool {
+        self.last_ok_ms.store(now_ms, Ordering::Relaxed);
+        self.set(PollState::Healthy, now_ms)
+    }
+
+    /// Рядок для `/stats`.
+    pub fn describe(&self) -> String {
+        self.state().describe().to_string()
+    }
 }
 
 /// Джерело оновлень.
@@ -280,6 +384,9 @@ pub struct Router<S: Session, A: AdminService> {
     admins: Vec<String>,
     limiter: Arc<InboundLimiter>,
     default_timezone: String,
+    /// Стан опитування Telegram — щоб адмін бачив у `/stats`, чому команди не
+    /// відповідають, не читаючи журнал.
+    poll_health: Option<Arc<PollHealth>>,
 }
 
 /// Параметри роутера.
@@ -292,6 +399,9 @@ pub struct RouterConfig {
     pub rate_limits: (u32, u32, u32),
     /// Часовий пояс за замовчуванням для нових користувачів.
     pub default_timezone: String,
+    /// Стан опитування Telegram. `None` — стан не відстежується (тести).
+    #[serde(skip)]
+    pub poll_health: Option<Arc<PollHealth>>,
 }
 
 impl<S: Session, A: AdminService> Router<S, A> {
@@ -322,6 +432,7 @@ impl<S: Session, A: AdminService> Router<S, A> {
             } else {
                 cfg.default_timezone.clone()
             },
+            poll_health: cfg.poll_health.clone(),
         }
     }
 
@@ -660,7 +771,7 @@ impl<S: Session, A: AdminService> Router<S, A> {
     }
 
     async fn cmd_stats(&self) -> String {
-        match self.admin.stats().await {
+        let mut text = match self.admin.stats().await {
             Ok(s) => format!(
                 "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}\n• буфер: {} у черзі · скинуто за межею: {}",
                 s.recipients,
@@ -676,7 +787,13 @@ impl<S: Session, A: AdminService> Router<S, A> {
                 s.messages_expired
             ),
             Err(e) => format!("Не вдалося зібрати статистику: {e}"),
+        };
+        // Стан опитування: під час конфлікту поллерів сам `/stats` не
+        // надійде — але адмін має бачити причину, коли доступу є.
+        if let Some(health) = &self.poll_health {
+            text.push_str(&format!("\n• команди: {}", health.describe()));
         }
+        text
     }
 
     async fn cmd_users(&self) -> String {
