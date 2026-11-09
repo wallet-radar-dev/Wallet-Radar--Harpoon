@@ -1,6 +1,6 @@
 //! Тести сесії користувача.
 
-use storage::{Language, NewUser, Role, SqliteStore, Store, Timeframe, Topic};
+use storage::{AlertRecord, Language, NewUser, Role, SqliteStore, Store, Timeframe, Topic};
 use user_session::{Session, SessionError, UserSession};
 
 fn session() -> UserSession<SqliteStore> {
@@ -109,4 +109,109 @@ async fn purge_removes_user_data() {
 
     assert!(matches!(s.user(40).await, Err(SessionError::NotFound(40))));
     assert_eq!(s.store().audit_count(&chat_ref).await.expect("audit"), 0);
+}
+
+/// Запис у журналі `alert_log` для перевірки фільтрів дайджесту.
+fn alert(key: &str, kind: &str, asset: &str, severity: &str, created_at: i64) -> AlertRecord {
+    AlertRecord {
+        alert_key: key.to_string(),
+        kind: kind.to_string(),
+        asset: Some(asset.to_string()),
+        window_start: created_at - 3_600_000,
+        severity: severity.to_string(),
+        degraded: false,
+        payload: "{}".to_string(),
+        created_at,
+    }
+}
+
+#[tokio::test]
+async fn alerts_since_filters_by_topic_and_severity() {
+    let s = session();
+    s.register(new_user(1, Some(1))).await.expect("register");
+    // Підписка лише на «китів» із мінімальною важливістю medium.
+    s.subscribe(1, Topic::Whale).await.expect("subscribe");
+
+    s.store()
+        .register_alert(&alert("a1", "whale_accumulation", "SOL", "medium", 5_000))
+        .await
+        .expect("whale medium");
+    s.store()
+        .register_alert(&alert("a2", "whale_accumulation", "ETH", "info", 5_000))
+        .await
+        .expect("whale info");
+    s.store()
+        .register_alert(&alert("a3", "liquidation_spike", "BTC", "high", 5_000))
+        .await
+        .expect("liquidation high");
+
+    let rows = s.alerts_since(1, 0).await.expect("alerts_since");
+    assert_eq!(rows.len(), 1, "лише китів із важливістю не нижче medium");
+    assert_eq!(rows[0].alert_key, "a1");
+}
+
+#[tokio::test]
+async fn alerts_since_filters_by_tracked_assets() {
+    let s = session();
+    s.register(new_user(2, Some(2))).await.expect("register");
+    s.subscribe(2, Topic::Whale).await.expect("subscribe");
+    s.store()
+        .set_user_asset(2, "SOL", true)
+        .await
+        .expect("asset");
+
+    s.store()
+        .register_alert(&alert("b1", "whale_accumulation", "SOL", "medium", 5_000))
+        .await
+        .expect("sol");
+    s.store()
+        .register_alert(&alert("b2", "whale_accumulation", "ETH", "medium", 5_000))
+        .await
+        .expect("eth");
+
+    let rows = s.alerts_since(2, 0).await.expect("alerts_since");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].alert_key, "b1");
+}
+
+#[tokio::test]
+async fn alerts_since_without_subscriptions_shows_everything() {
+    let s = session();
+    s.register(new_user(3, Some(3))).await.expect("register");
+
+    s.store()
+        .register_alert(&alert("c1", "whale_accumulation", "SOL", "info", 5_000))
+        .await
+        .expect("whale");
+    s.store()
+        .register_alert(&alert("c2", "liquidation_spike", "BTC", "high", 5_000))
+        .await
+        .expect("liq");
+
+    let rows = s.alerts_since(3, 0).await.expect("alerts_since");
+    assert_eq!(rows.len(), 2, "без підписок показуємо все");
+}
+
+#[tokio::test]
+async fn alerts_since_skips_manual_broadcasts_and_respects_window() {
+    let s = session();
+    s.register(new_user(4, Some(4))).await.expect("register");
+
+    s.store()
+        .register_alert(&alert("d1", "manual", "", "high", 9_000))
+        .await
+        .expect("manual");
+    s.store()
+        .register_alert(&alert("d2", "whale_accumulation", "SOL", "medium", 5_000))
+        .await
+        .expect("whale");
+
+    // Вікно від 6_000: ручна розсилка й алерт поза вікном — геть.
+    let rows = s.alerts_since(4, 6_000).await.expect("alerts_since");
+    assert!(rows.is_empty());
+
+    // Ширше вікно — лише ринковий алерт, ручна розсилка не проходить.
+    let rows = s.alerts_since(4, 0).await.expect("alerts_since");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].alert_key, "d2");
 }

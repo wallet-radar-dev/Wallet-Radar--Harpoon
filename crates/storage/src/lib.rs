@@ -119,7 +119,7 @@ impl Timeframe {
 }
 
 /// Тема (канал) алертів.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Topic {
     /// Великі транзакції.
@@ -554,6 +554,16 @@ pub trait Store {
     fn all_active_chats(&self) -> impl Future<Output = Result<Vec<i64>, StoreError>>;
     /// Усі користувачі — для синхронізації реєстру на сервер Wallet Radar.
     fn list_users(&self) -> impl Future<Output = Result<Vec<User>, StoreError>>;
+
+    /// Алерти, створені не раніше `since_ms`, — новіші спершу.
+    ///
+    /// Джерело для дайджестів за період: у журналі лежать **агрегати**
+    /// (вид, символ актива, важливість, вікно), а не сирі події, тому
+    /// добірка звідти не може витікати адресами.
+    fn alerts_since(
+        &self,
+        since_ms: i64,
+    ) -> impl Future<Output = Result<Vec<AlertRecord>, StoreError>>;
 
     /// `Ok(true)` — це подія щойно побачена вперше (записано); `Ok(false)` — дублікат.
     fn seen_event(&self, event_id: &str, ts: i64)

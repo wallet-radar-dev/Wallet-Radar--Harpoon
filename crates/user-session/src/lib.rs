@@ -6,9 +6,13 @@
 //!
 //! Усі операції асинхронні і не блокують async-екзекутор.
 
+use std::collections::HashMap;
 use std::future::Future;
 
-use storage::{Language, NewUser, Purged, Role, Settings, Store, Timeframe, Topic, User};
+use alert_engine::{AlertKind, Severity};
+use storage::{
+    AlertRecord, Language, NewUser, Purged, Role, Settings, Store, Timeframe, Topic, User,
+};
 
 /// Помилки сесії.
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +65,17 @@ pub trait Session {
     ) -> impl Future<Output = Result<(), SessionError>>;
     /// Видаляє всі дані користувача (GDPR).
     fn purge(&self, user_id: i64) -> impl Future<Output = Result<Purged, SessionError>>;
+    /// Алерти за період, релевантні цьому користувачу.
+    ///
+    /// Фільтри — ті самі, що й для доставки в реальному часі: підписки на
+    /// теми, мінімальна важливість у підписці та перелік відстежуваних
+    /// активів. Якщо підписок немає, показуємо всі алерти: дайджест має
+    /// бути корисним і тим, хто ще нічого не підписав.
+    fn alerts_since(
+        &self,
+        chat_id: i64,
+        since_ms: i64,
+    ) -> impl Future<Output = Result<Vec<AlertRecord>, SessionError>>;
 }
 
 /// Обгортка сховища, що реалізує [`Session`].
@@ -173,5 +188,60 @@ impl<S: Store> Session for UserSession<S> {
 
     async fn purge(&self, user_id: i64) -> Result<Purged, SessionError> {
         Ok(self.store.purge_user(user_id).await?)
+    }
+
+    async fn alerts_since(
+        &self,
+        chat_id: i64,
+        since_ms: i64,
+    ) -> Result<Vec<storage::AlertRecord>, SessionError> {
+        let all = self.store.alerts_since(since_ms).await?;
+        let subs = self.store.subscriptions(chat_id).await?;
+        let assets = self.store.user_assets(chat_id).await?;
+
+        // Порожні підписки означають «показуй усе»: дайджест має бути
+        // корисним і тим, хто ще нічого не підписав. Але фільтр за видом
+        // (відкидаємо ручні розсилки) діє завжди — тому раннього виходу тут
+        // немає, лише окремі умови на кожен фільтр.
+        //
+        // Тема → мінімальна важливість.
+        let mut wanted: HashMap<Topic, Severity> = HashMap::new();
+        for s in &subs {
+            wanted.insert(s.topic, Severity::parse(&s.min_severity));
+        }
+
+        let mut out = Vec::new();
+        for a in all {
+            // Ручні розсилки адміністратора — не ринкові сигнали.
+            let kind = match AlertKind::parse(&a.kind) {
+                Some(k) => k,
+                None => continue,
+            };
+            let topic = Topic::from_str_code(kind.topic());
+
+            // Фільтр за темою: якщо користувач підписався на «китів»,
+            // ліквідації в дайджест не потрапляють.
+            if !wanted.is_empty() {
+                match wanted.get(&topic) {
+                    Some(min) => {
+                        if Severity::parse(&a.severity) < *min {
+                            continue;
+                        }
+                    }
+                    None => continue,
+                }
+            }
+
+            // Фільтр за відстежуваними активами (якщо користувач обрав їх).
+            if !assets.is_empty() {
+                let symbol = a.asset.clone().unwrap_or_default().to_uppercase();
+                if !assets.iter().any(|s| s.to_uppercase() == symbol) {
+                    continue;
+                }
+            }
+
+            out.push(a);
+        }
+        Ok(out)
     }
 }
