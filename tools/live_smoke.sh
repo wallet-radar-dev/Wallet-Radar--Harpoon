@@ -21,6 +21,8 @@ WR_PASS="${WR_PASSWORD:-}"
 MOCK_ADDR="${MOCK_ADDR:-127.0.0.1:8099}"
 RUN_SECS="${RUN_SECS:-25}"
 OUT="/tmp/wra-messages.log"
+BIN="${BIN:-./target/debug/bot}"
+MOCK_BIN="${MOCK_BIN:-./target/debug/mock-telegram}"
 CFG="/tmp/wra-live.toml"
 
 if [[ -z "$WR_PASS" ]]; then
@@ -74,7 +76,7 @@ EOF
 
 rm -f "$OUT" /tmp/wra-live.db
 echo "→ піднімаю мок Telegram на $MOCK_ADDR"
-./target/debug/mock-telegram "$MOCK_ADDR" "$OUT" >/tmp/wra-mock.log 2>&1 &
+"$MOCK_BIN" "$MOCK_ADDR" "$OUT" >/tmp/wra-mock.log 2>&1 &
 MOCK_PID=$!
 trap 'kill $MOCK_PID 2>/dev/null || true' EXIT
 sleep 1
@@ -82,7 +84,7 @@ sleep 1
 echo "→ запускаю бота проти $WR_BASE"
 start_bot() {
   TELEGRAM_BOT_TOKEN="dummy-live-token" WR_PASSWORD="$WR_PASS" \
-    ./target/debug/bot "$CFG" >>/tmp/wra-bot.log 2>&1 &
+    "$BIN" "$CFG" >>/tmp/wra-bot.log 2>&1 &
   BOT_PID=$!
 }
 
