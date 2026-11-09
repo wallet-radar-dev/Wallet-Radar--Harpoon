@@ -31,6 +31,12 @@ poll_interval_secs = 60          # як часто брати зріз агре�
 event_poll_interval_secs = 15    # страхувальний опитування подій
 request_timeout_secs = 20
 ws_path = "/ws"
+# Синхронізація реєстру підключених із сервером Wallet Radar: сервер
+# замінює свій файл реєстру цілком, тож лише один інстанс має право на запис.
+# Для тестів і локальних прогонів — false.
+registry_sync_enabled = true
+sync_token_env = "TELEGRAM_SYNC_TOKEN"
+registry_sync_interval_secs = 60
 
 [storage]
 backend = "sqlite"               # sqlite | postgres

@@ -628,6 +628,20 @@ impl Store for SqliteStore {
         .await
     }
 
+    async fn list_users(&self) -> Result<Vec<User>, StoreError> {
+        self.call(|conn| {
+            let sql = format!("SELECT {USER_COLS} FROM users ORDER BY chat_id");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], row_to_user)?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     async fn seen_event(&self, event_id: &str, ts: i64) -> Result<bool, StoreError> {
         let event_id = event_id.to_string();
         self.call(move |conn| {

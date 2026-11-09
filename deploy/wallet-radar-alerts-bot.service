@@ -3,6 +3,9 @@ Description=Wallet Radar Alerts Bot — багатокористувацький
 Documentation=file:///opt/wallet-radar-alerts-bot/README.md
 After=network-online.target wallet-radar-rust.service
 Wants=network-online.target
+# Обмеження рестартів: якщо бот падає підряд — не крутимо безкінечний цикл.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,8 +13,12 @@ User=ubuntu
 WorkingDirectory=/opt/wallet-radar-alerts-bot
 EnvironmentFile=/opt/wallet-radar-alerts-bot/.env
 ExecStart=/opt/wallet-radar-alerts-bot/bin/bot /opt/wallet-radar-alerts-bot/config.toml
-Restart=always
-RestartSec=10
+# on-failure, а не always: бот, який завершився через 409 (на токені вже
+# працює інший полер), виходить із кодом 0 і НЕ піднімається знову — інакше
+# виникає безкінечний цикл старт/409/старт. Падіння (ненульовий код) —
+# піднімаємо.
+Restart=on-failure
+RestartSec=15
 StandardOutput=journal
 StandardError=journal
 

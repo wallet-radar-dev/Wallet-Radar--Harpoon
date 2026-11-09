@@ -552,6 +552,8 @@ pub trait Store {
     fn count_recipients(&self) -> impl Future<Output = Result<i64, StoreError>>;
     /// Усі активні чати (не muted, не blocked, state='active') — для ручної розсилки.
     fn all_active_chats(&self) -> impl Future<Output = Result<Vec<i64>, StoreError>>;
+    /// Усі користувачі — для синхронізації реєстру на сервер Wallet Radar.
+    fn list_users(&self) -> impl Future<Output = Result<Vec<User>, StoreError>>;
 
     /// `Ok(true)` — це подія щойно побачена вперше (записано); `Ok(false)` — дублікат.
     fn seen_event(&self, event_id: &str, ts: i64)

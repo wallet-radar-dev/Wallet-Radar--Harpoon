@@ -111,8 +111,36 @@ export WR_PASSWORD='пароль-читача-wallet-radar'
 # у config.toml:
 #   [telegram]
 #   api_url = "http://127.0.0.1:8099"
+#   [wr]
+#   registry_sync_enabled = false   # тест не має права перезаписувати серверний реєстр
 
 TELEGRAM_BOT_TOKEN=dummy WR_PASSWORD=... ./target/release/bot config.toml
+```
+
+`MOCK_UPDATES=/tmp/updates.json` підкладає моку готові оновлення — так
+перевіряється весь шлях «отримали команду → відповіли», а не лише опитування.
+
+### Синхронізація реєстру підключених
+
+Сервер Wallet Radar розсилає **свої власні** алерти за списком у
+`dataset/telegram-users.json`. Щоб серверні й ботові алерти йшли одним
+подібником, бот записує свій реєстр на сервер (`POST /api/telegram-users`,
+вузький токен `X-Telegram-Sync-Token`).
+
+* Це **запис одного локального файлу на сервері**, а не читання даних: усі
+  *дані* бот бере через read-only API.
+* Сервер **замінює файл цілком**, тому бот надсилає повний список, а не дельту.
+* **Порожній реєстр ніколи не надсилається** — інакше тестовий інстанс або
+  міграція стерли б список реальних підписників (захист у `registry.rs` +
+  тест `bot/tests/registry_sync.rs`).
+* Для тестових і локальних прогонів — `registry_sync_enabled = false`.
+
+### Міграція зі старого бота
+
+```bash
+# перенести підписників зі старого серверного реєстру в БД нового бота
+./target/release/import-registry /opt/wallet-tracker/dataset/telegram-users.json \
+    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db
 ```
 
 ### systemd
@@ -122,6 +150,49 @@ sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now wallet-radar-alerts-bot
 journalctl -u wallet-radar-alerts-bot -f
+```
+
+Юнит працює як `Restart=on-failure`: бот, який завершився через **409** (на
+токені вже працює інший полер), виходить із кодом 0 і **не піднімається
+знову** — інакше виникає цикл старт/409/старт. Падіння (ненульовий код)
+перезапускається, але не більше 5 разів за 5 хвилин.
+
+---
+
+## Розгортання на ВМ
+
+```
+/opt/wallet-radar-alerts-bot/
+├── bin/            bot, mock-telegram, import-registry
+├── config.toml     без секретів — лише імена змінних оточення
+├── data/bot.db     SQLite (WAL)
+├── docs/           DESIGN.md, ARCHITECTURE.md
+└── .env            0600: TELEGRAM_BOT_TOKEN, WR_PASSWORD,
+                    TELEGRAM_SYNC_TOKEN, BOT_REF_SECRET
+```
+
+Перемикання полера зі старого `botd` на новий бот:
+
+```bash
+# 1. старий бот — зупинити й вимкнути
+sudo systemctl disable --now wallet-radar-bot.service
+
+# 2. перенести підписників
+./target/release/import-registry /opt/wallet-tracker/dataset/telegram-users.json \
+    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db
+
+# 3. новий сервіс
+sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now wallet-radar-alerts-bot
+```
+
+**Правило Wallet Radar: один полер на токен.** Два поллери на тому самому
+токені → `409 Conflict`, і бот завершується з явним повідомленням. Перевірка,
+що полер один:
+
+```bash
+ps aux | grep -E 'botd|alerts-bot' | grep -v grep
 ```
 
 ---
@@ -136,12 +207,14 @@ cargo test --workspace
   zero-width і повноширинні символи (обхід через Unicode), невипадкові спрацювання.
 * `wr-client` — 10 тестів: whitelist-розбір, відсутність адрес у типах,
   стабільність ідентифікаторів, розбір WS-кадрів.
-* `alert-engine` — 7 тестів: пороги, вікна, стабільність ключа, відсутність
-  адрес у відрендереному тексті.
+* `alert-engine` — 8 тестів: пороги, вікна, стабільність ключа, відсутність
+  адрес у відрендереному тексті, агрегація cross-asset в один алерт на вікно.
 * `storage` + `user-session` — 15 тестів: схема, ідемпотентність, каскади,
   GDPR-видалення, ізоляція стану між чатами.
 * `bot/tests/golden.rs` — 2 тести: **нуль заборонених токенів у виході**,
   фільтр ручного адмінського тексту.
+* `bot/tests/registry_sync.rs` — 2 тести: **порожній реєстр не стирає
+  підписників на сервері**, непустий — синхронізується.
 
 ---
 
@@ -186,10 +259,16 @@ cargo test --workspace
   є). Бот деградує коректно — секція порожня, у лог попередження, решта працює.
 * **Згортання дублів у дайджест** (`[broadcast] digest_threshold_pct`) ще не
   реалізовано: при старті бот пише про це попередження, і алерти йдуть як є.
-* **Справжнього токена Telegram на цій ВМ немає** — він живе на Windows-машині.
-  Прогін на живому джерелі йшов через мок API (`[telegram] api_url`); щоб
-  перейти на справжній Telegram, достатньо задати `TELEGRAM_BOT_TOKEN` і
-  прибрати `api_url`.
+* **Крос-а asset-правило агреговано:** `cross_asset_anomaly` тепер дає **один
+  алерт на вікно** (топ-3 активи) замість алерту на кожен актив.
+
+> **Статус перемикання (9 листопада 2026).** Полер перенесено: старий
+> `wallet-radar-bot.service` — `disabled/inactive`, новий
+> `wallet-radar-alerts-bot.service` — `active + enabled` і працює з
+> **справжнім** токеном. Підписники (3) та їхні підписки (15) перенесені
+> через `import-registry`, серверний реєстр синхронізовано (`users=3`).
+> Якщо на іншій машині з тим самим токеном залишився полер — новий бот
+> отримає `409` і зупиниться з явним повідомленням.
 
 ---
 
