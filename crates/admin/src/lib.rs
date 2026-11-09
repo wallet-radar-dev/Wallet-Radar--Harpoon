@@ -39,6 +39,10 @@ pub struct AdminStats {
     pub messages_failed: u64,
     pub messages_retried: u64,
     pub messages_skipped: u64,
+    /// Скільки доставок скинуто за межею буфера.
+    pub messages_expired: u64,
+    /// Скільки доставок чекає в черзі (буфер) зараз.
+    pub backlog_pending: i64,
 }
 
 /// Розсилка, якою користується адмін.
@@ -109,6 +113,8 @@ impl<S: Store, N: Notifier> AdminBroadcaster for Broadcaster<S, N> {
             messages_failed: s.messages_failed,
             messages_retried: s.messages_retried,
             messages_skipped: s.messages_skipped,
+            messages_expired: s.messages_expired,
+            backlog_pending: 0,
         }
     }
 }
@@ -217,6 +223,8 @@ impl<S: Store, B: AdminBroadcaster> Admin<S, B> {
         let recipients = self.store.count_recipients().await?;
         let mut s = self.broadcaster.stats();
         s.recipients = recipients;
+        // Буфер черги: скільки доставок ще чекає (вони не відправлені).
+        s.backlog_pending = self.store.count_pending().await?;
         Ok(s)
     }
 
