@@ -662,10 +662,12 @@ impl<S: Session, A: AdminService> Router<S, A> {
     async fn cmd_stats(&self) -> String {
         match self.admin.stats().await {
             Ok(s) => format!(
-                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}",
+                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}",
                 s.recipients,
                 s.alerts_published,
                 s.alerts_duplicate,
+                s.alerts_folded,
+                s.digests_sent,
                 s.messages_sent,
                 s.messages_failed,
                 s.messages_retried,

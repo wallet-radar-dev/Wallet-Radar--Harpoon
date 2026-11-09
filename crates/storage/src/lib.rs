@@ -426,6 +426,26 @@ pub struct AlertRecord {
     pub created_at: i64,
 }
 
+/// Сигнал, згорнутий у зведений дайджест, але ще не відправлений.
+///
+/// Буфер згортання живе у БД, а не в памʼяті процесу: перезапуск не має
+/// втрачати згорнуті алерти.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoldPending {
+    /// Ключ алерту (унікальний — повтор не дублюється).
+    pub alert_key: String,
+    /// Вид алерту.
+    pub kind: String,
+    /// Вікно агрегації алерту (`15m`, `1h` тощо) — групувальна ознака.
+    pub win: String,
+    /// Символ актива.
+    pub asset: Option<String>,
+    /// Повний алерт (JSON) — щоб зібрати зведення без повторного читання джерела.
+    pub payload: String,
+    /// Час створення (epoch-мс).
+    pub created_at: i64,
+}
+
 /// Запис журналу аудиту.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -564,6 +584,19 @@ pub trait Store {
         &self,
         since_ms: i64,
     ) -> impl Future<Output = Result<Vec<AlertRecord>, StoreError>>;
+
+    /// Додати сигнал до буфера згортання (повтор із тим самим ключем — ні).
+    fn fold_pending_insert(
+        &self,
+        p: &FoldPending,
+    ) -> impl Future<Output = Result<bool, StoreError>>;
+    /// Увесь буфер згортання.
+    fn fold_pending_list(&self) -> impl Future<Output = Result<Vec<FoldPending>, StoreError>>;
+    /// Прибрати з буфера зазначені сигнали (після формування зведення).
+    fn fold_pending_remove(
+        &self,
+        alert_keys: &[String],
+    ) -> impl Future<Output = Result<usize, StoreError>>;
 
     /// `Ok(true)` — це подія щойно побачена вперше (записано); `Ok(false)` — дублікат.
     fn seen_event(&self, event_id: &str, ts: i64)

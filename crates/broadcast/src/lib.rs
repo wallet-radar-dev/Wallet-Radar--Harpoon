@@ -13,7 +13,7 @@
 //! Швидкість відповіді — не деталь: користувач надіслав питання й чекає на нього.
 //! Розсилка на 3000 користувачів — фонова робота, вона не має права заважати.
 
-use alert_engine::{Alert, AlertKind};
+use alert_engine::{Alert, AlertKind, FoldedSignal};
 use privacy_filter::PrivacyFilter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,6 +63,14 @@ pub struct BroadcastConfig {
     pub backoff_cap_ms: u64,
     /// Інтервал опитування черги.
     pub poll_interval_ms: u64,
+    /// Поріг «широкого» сигналу: частка активних користувачів (у відсотках),
+    /// яка має отримати той самий сигнал, щоб він згорнувся у зведений дайджест.
+    ///
+    /// `0` — згортати все. Більше — згортаються лише справді спільні сигнали,
+    /// а вузькі (персональні) лишаються детальними й негайними.
+    pub digest_threshold_pct: u32,
+    /// Вікно згортання: раз на скільки секунд збирається один зведений дайджест.
+    pub digest_window_secs: u64,
 }
 
 impl Default for BroadcastConfig {
@@ -77,6 +85,8 @@ impl Default for BroadcastConfig {
             backoff_base_ms: 2_000,
             backoff_cap_ms: 300_000,
             poll_interval_ms: 500,
+            digest_threshold_pct: 25,
+            digest_window_secs: 300,
         }
     }
 }
@@ -172,6 +182,9 @@ pub enum PublishOutcome {
     AlreadyKnown,
     /// Зареєстровано й поставлено в чергу.
     Queued { recipients: usize },
+    /// Зареєстровано, але сигнал згорнуто у зведений дайджест: підписники
+    /// отримають одне повідомлення за вікно замість окремих на кожен алерт.
+    Folded { recipients: usize },
 }
 
 /// Помилки розсилки.
@@ -186,13 +199,18 @@ pub enum BroadcastError {
 pub struct BroadcastStats {
     pub alerts_published: u64,
     pub alerts_duplicate: u64,
+    pub alerts_folded: u64,
+    pub digests_sent: u64,
     pub messages_sent: u64,
     pub messages_failed: u64,
     pub messages_retried: u64,
     pub messages_skipped: u64,
 }
 
-/// Розсильник.
+/// Згорнуті сигнали, що очікують зведення.
+///
+/// Буфер живе у БД (`fold_pending`), а не в памʼяті: перезапуск процесу
+/// не має втрачати згорнуті алерти.
 pub struct Broadcaster<S: Store, N: Notifier> {
     store: S,
     notifier: N,
@@ -207,6 +225,8 @@ pub struct Broadcaster<S: Store, N: Notifier> {
 pub struct BroadcastStatsAtomic {
     pub alerts_published: AtomicU64,
     pub alerts_duplicate: AtomicU64,
+    pub alerts_folded: AtomicU64,
+    pub digests_sent: AtomicU64,
     pub messages_sent: AtomicU64,
     pub messages_failed: AtomicU64,
     pub messages_retried: AtomicU64,
@@ -218,6 +238,8 @@ impl BroadcastStatsAtomic {
         BroadcastStats {
             alerts_published: self.alerts_published.load(Ordering::Relaxed),
             alerts_duplicate: self.alerts_duplicate.load(Ordering::Relaxed),
+            alerts_folded: self.alerts_folded.load(Ordering::Relaxed),
+            digests_sent: self.digests_sent.load(Ordering::Relaxed),
             messages_sent: self.messages_sent.load(Ordering::Relaxed),
             messages_failed: self.messages_failed.load(Ordering::Relaxed),
             messages_retried: self.messages_retried.load(Ordering::Relaxed),
@@ -269,6 +291,27 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
 
         let topic = storage::Topic::from_str_code(alert.kind.topic());
         let recipients = self.store.recipients_for(topic).await?;
+        if recipients.is_empty() {
+            return Ok(PublishOutcome::Queued { recipients: 0 });
+        }
+
+        // «Широкий» сигнал — той, що долає до великої частки активних
+        // користувачів. Такі сигнали згортаються: однаковий алерт для
+        // тисяч людей — це спам, а не інформація.
+        if self.is_broad(recipients.len()).await {
+            self.fold(alert).await?;
+            self.stats.alerts_folded.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(
+                kind = alert.kind.as_str(),
+                asset = %alert.asset.symbol,
+                recipients = recipients.len(),
+                "сигнал згорнуто у зведений дайджест"
+            );
+            return Ok(PublishOutcome::Folded {
+                recipients: recipients.len(),
+            });
+        }
+
         let mut queued = 0usize;
 
         for chat_id in recipients {
@@ -290,6 +333,156 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
             queued += 1;
         }
         Ok(PublishOutcome::Queued { recipients: queued })
+    }
+
+    /// Чи є сигнал «широким» — тобто таким, що його варто згорнути.
+    ///
+    /// Поріг — частка **активних** користувачів, яка має отримати сигнал.
+    /// `0` у конфігурации означає «згортати все». Порівнюємо хрестом,
+    /// без округлення: `recipients * 100 >= threshold * total`.
+    async fn is_broad(&self, recipients: usize) -> bool {
+        // Сигнал до одного одержувача ніколи не згортається: згортання має
+        // сенс, коли один і той самий сигнал іде багатьом, а для однієї
+        // людини це лише затримка й втрата деталей.
+        if recipients < 2 {
+            return false;
+        }
+        let threshold = self.cfg.digest_threshold_pct;
+        if threshold == 0 {
+            return true;
+        }
+        // Активні користувачі — знаменник. Якщо їх немає, то й одержувачів
+        // немає: згортати нічого.
+        let total = match self.store.count_recipients().await {
+            Ok(n) if n > 0 => n,
+            _ => return false,
+        };
+        (recipients as i64) * 100 >= (threshold as i64) * total
+    }
+
+    /// Додати сигнал до буфера зведень (у БД).
+    ///
+    /// Буфер у БД, а не в памʼяті: перезапуск процесу (або рестарт через
+    /// конфлікт поллерів) не має втрачати згорнуті алерти — вони просто
+    /// зникли б із ротації.
+    async fn fold(&self, alert: &Alert) -> Result<(), BroadcastError> {
+        let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".into());
+        self.store
+            .fold_pending_insert(&storage::FoldPending {
+                alert_key: alert.key.as_str().to_string(),
+                kind: alert.kind.as_str().to_string(),
+                win: alert.metrics.window.as_str().to_string(),
+                asset: Some(alert.asset.symbol.clone()),
+                payload,
+                created_at: alert.created_at,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Злити накопичені сигнали в зведені дайджести — раз на вікно.
+    ///
+    /// Повертає кількість поставлених у чергу доставок. Якщо вікно ще не
+    /// минуло — нічого не робимо.
+    pub async fn flush_digests(&self, now: i64) -> Result<usize, BroadcastError> {
+        let window_ms = (self.cfg.digest_window_secs.max(1) as i64) * 1000;
+        let pending = self.store.fold_pending_list().await?;
+        if pending.is_empty() {
+            return Ok(0);
+        }
+        // Вікно відраховується від найстаршого згорнутого сигналу.
+        let since = pending.iter().map(|p| p.created_at).min().unwrap_or(now);
+        if now - since < window_ms {
+            return Ok(0);
+        }
+
+        // Групуємо за видом і вікном агрегації. Групування за активом не
+        // працювало б: двадцять різних активів дали б двадцять повідомлень
+        // замість одного зведення.
+        let mut groups: HashMap<(AlertKind, String), Vec<storage::FoldPending>> = HashMap::new();
+        for p in pending {
+            let kind = match AlertKind::parse(&p.kind) {
+                Some(k) => k,
+                None => continue,
+            };
+            groups.entry((kind, p.win.clone())).or_default().push(p);
+        }
+
+        let mut queued = 0usize;
+        let mut flushed: Vec<String> = Vec::new();
+        for ((kind, win), items) in groups {
+            if items.is_empty() {
+                continue;
+            }
+            let topic = storage::Topic::from_str_code(kind.topic());
+            let recipients = self.store.recipients_for(topic).await?;
+            if recipients.is_empty() {
+                continue;
+            }
+            // Сильніший алерт групи: користувачеві цікавить максимум.
+            let strongest = items
+                .iter()
+                .filter_map(|p| serde_json::from_str::<Alert>(&p.payload).ok())
+                .max_by(|a, b| {
+                    a.severity.cmp(&b.severity).then(
+                        a.metrics
+                            .total_value_usd
+                            .partial_cmp(&b.metrics.total_value_usd)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
+                });
+            let strongest = match strongest {
+                Some(a) => a,
+                None => continue,
+            };
+            // Активи групи — унікальні, до п'яти: показуємо, які саме.
+            let mut assets: Vec<String> = Vec::new();
+            for p in &items {
+                let s = p.asset.clone().unwrap_or_default();
+                if !s.is_empty() && !assets.contains(&s) {
+                    assets.push(s);
+                }
+            }
+            assets.truncate(5);
+            let folded = FoldedSignal {
+                count: items.len(),
+                assets,
+                strongest,
+            };
+            // Ключ доставки — з вікном у складі: щоб два різні вікна не
+            // злилися в одну доставку.
+            let alert_key = format!("digest_{}_{}_{}", kind.as_str(), win, since);
+
+            for chat_id in recipients {
+                let lang = match self.store.get_user(chat_id).await? {
+                    Some(u) => u.language.as_str().to_string(),
+                    None => "uk".to_string(),
+                };
+                let text = folded.render(&lang);
+                self.store
+                    .enqueue_delivery(NewDelivery {
+                        chat_id,
+                        alert_key: alert_key.clone(),
+                        priority: Priority::Digest,
+                        text,
+                        created_at: now,
+                    })
+                    .await?;
+                queued += 1;
+            }
+            for p in &items {
+                flushed.push(p.alert_key.clone());
+            }
+            self.stats.digests_sent.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Прибираємо з буфера те, що вже пішло у зведенні. Якщо зняття
+        // не вдалося — наступного разу зведення повториться (безпечно:
+        // доставка ідемпотентна за ключем).
+        if !flushed.is_empty() {
+            self.store.fold_pending_remove(&flushed).await?;
+        }
+        Ok(queued)
     }
 
     /// Приватна відповідь — назовні, поза чергою розсилки.
@@ -458,6 +651,13 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
     pub async fn run_worker(self: Arc<Self>, stop: Arc<AtomicBool>) {
         while !stop.load(Ordering::Relaxed) {
             let now = alert_engine_now_ms();
+            // Злиття зведених дайджестів — до відправки черги, щоб
+            // зведення пішли разом з іншими повідомленнями.
+            match self.flush_digests(now).await {
+                Ok(0) => {}
+                Ok(n) => tracing::debug!(count = n, "черга: зведено в дайджест"),
+                Err(e) => tracing::warn!(error = %e, "черга: злиття дайджестів не вдалося"),
+            }
             match self.pump_once(now).await {
                 Ok(0) => {}
                 Ok(n) => tracing::debug!(count = n, "черга: відправлено"),

@@ -31,6 +31,10 @@ pub struct AdminStats {
     pub recipients: i64,
     pub alerts_published: u64,
     pub alerts_duplicate: u64,
+    /// Скільки сигналів згорнуто у зведені дайджести.
+    pub alerts_folded: u64,
+    /// Скільки зведених дайджестів сформовано.
+    pub digests_sent: u64,
     pub messages_sent: u64,
     pub messages_failed: u64,
     pub messages_retried: u64,
@@ -99,6 +103,8 @@ impl<S: Store, N: Notifier> AdminBroadcaster for Broadcaster<S, N> {
             recipients: 0,
             alerts_published: s.alerts_published,
             alerts_duplicate: s.alerts_duplicate,
+            alerts_folded: s.alerts_folded,
+            digests_sent: s.digests_sent,
             messages_sent: s.messages_sent,
             messages_failed: s.messages_failed,
             messages_retried: s.messages_retried,
