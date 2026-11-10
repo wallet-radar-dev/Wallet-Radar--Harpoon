@@ -351,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
                     heartbeat_ms: cfg.bot.heartbeat_timeout_secs.max(30) * 1000,
                     conflict_policy: cfg.bot.poll_conflict_policy,
                     conflict_retry_secs: cfg.bot.poll_conflict_retry_secs.max(10),
+                    preempt_secs: cfg.bot.poll_conflict_preempt_secs.max(1),
                     health: poll_health.clone(),
                 },
             )
@@ -522,6 +523,8 @@ struct PollCfg {
     conflict_policy: PollConflictPolicy,
     /// Пауза між повторами опитування після 409.
     conflict_retry_secs: u64,
+    /// Пауза перед повтором опитування в політиці `preempt`.
+    preempt_secs: u64,
     /// Стан опитування — спільний із роутером (показ у `/stats`).
     health: Arc<PollHealth>,
 }
@@ -707,24 +710,34 @@ async fn telegram_loop(
                         "409 Conflict: на токені вже працює інший полер Telegram"
                     ));
                 }
+                // Пауза перед наступною спробою. Для `preempt` вона коротка:
+                // Telegram віддає 409 **старшому** з двох запитів, тож наш
+                // повтор (за кілька секунд) переб'є чужий запит — і оновлення
+                // забиратимемо ми. Для `keep_running` пауза довга, щоб не
+                // смикати API й не засмічувати журнал.
+                let delay = bot::config::conflict_retry_delay(
+                    cfg.conflict_policy,
+                    cfg.preempt_secs,
+                    cfg.conflict_retry_secs,
+                );
                 if !conflict_reported {
                     conflict_reported = true;
                     tracing::error!(
                         "Telegram відповів 409: на цьому токені вже працює інший полер. \
                          Опитування команд призупинено; збір даних і доставка алертів \
                          продовжуються. Повтор опитування через {} с.",
-                        cfg.conflict_retry_secs
+                        delay.as_secs()
                     );
                 } else {
                     tracing::warn!(
                         "опитування Telegram все ще недоступне (409) — повтор через {} с",
-                        cfg.conflict_retry_secs
+                        delay.as_secs()
                     );
                 }
                 // Пауза перед наступною спробою: інакше отримаємо 409 у циклі
                 // і засмимо журнал та ліміт Telegram.
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(cfg.conflict_retry_secs)) => {}
+                    _ = tokio::time::sleep(delay) => {}
                     _ = shutdown.changed() => {
                         tracing::info!("опитування Telegram перервано зупинкою");
                         return Ok(());
