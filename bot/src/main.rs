@@ -578,7 +578,7 @@ async fn telegram_loop(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     cfg: PollCfg,
 ) -> Result<(), anyhow::Error> {
-    let mut last_update_ms = now_ms();
+    let mut last_poll_ok_ms = now_ms();
     let mut last_warn_ms = now_ms();
     let mut offset: i64 = store
         .cursor("telegram_offset")
@@ -595,6 +595,23 @@ async fn telegram_loop(
     let mut last_notice_ms = 0i64;
 
     while !stop.load(Ordering::Relaxed) {
+        // Heartbeat: важлива не кількість оновлень, а **живість поллера**.
+        // У спокійному бота оновлень може не бути годинами — і це нормально:
+        // порожня відповідь на довгий poll теж є «кадром» (§8.4). Перевірка
+        // тут, на початку циклу, — щоб видно було, що останнє вдале
+        // опитування було давніше за heartbeat.
+        let cycle_start = now_ms();
+        if cycle_start - last_poll_ok_ms > cfg.heartbeat_ms as i64
+            && cycle_start - last_warn_ms > 60_000
+        {
+            // Попереджаємо не частіше ніж раз на хвилину — інакше воно
+            // перетвориться на спам у лозі.
+            last_warn_ms = cycle_start;
+            tracing::warn!(
+                silent_ms = cycle_start - last_poll_ok_ms,
+                "Telegram не відповідає на опитування довше, ніж heartbeat-таймаут"
+            );
+        }
         // Опитування перериваємо на зупинці: інакше процес чекатиме на
         // відповідь Telegram до 25 секунд, systemd вб'є його — і «мертве»
         // getUpdates-з'єднання дасть наступному інстансу 409 Conflict.
@@ -626,20 +643,9 @@ async fn telegram_loop(
                     last_notice_ms = now;
                     notify_poll_state(&store, &broadcaster, PollState::Healthy).await;
                 }
-                if updates.is_empty() {
-                    let silent = now_ms() - last_update_ms;
-                    // Попереджаємо не частіше ніж раз на хвилину — інакше
-                    // «тиша Telegram» перетвориться на спам у лозі.
-                    if silent > cfg.heartbeat_ms as i64 && now_ms() - last_warn_ms > 60_000 {
-                        last_warn_ms = now_ms();
-                        tracing::warn!(
-                            silent_ms = silent,
-                            "Telegram не надсилає оновлень довше, ніж heartbeat-таймаут"
-                        );
-                    }
-                } else {
-                    last_update_ms = now_ms();
-                }
+                // Heartbeat оновлюється успішним опитуванням: порожня
+                // відповідь — теж кадр (див. перевірку на початку циклу).
+                last_poll_ok_ms = now;
                 for upd in updates {
                     offset = offset.max(upd.update_id + 1);
                     // Повторний update не виконуємо двічі.
