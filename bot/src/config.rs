@@ -73,9 +73,16 @@ pub struct BotConfig {
     ///   команди знову оброблятимуться.
     /// * `exit` — завершити процес: нічого не дублюємо, але й нічого не
     ///   надсилаємо.
+    /// * `preempt` — перехопити токен: після 409 повторити опитування за
+    ///   кілька секунд, щоб перебити чужий запит і забирати оновлення собі.
     pub poll_conflict_policy: PollConflictPolicy,
     /// Пауза між повторами опитування після 409 (політика `keep_running`).
     pub poll_conflict_retry_secs: u64,
+    /// Пауза перед повтором опитування в політиці `preempt`.
+    ///
+    /// Мала: чим швидше ми переб'ємо чужий запит, тим більше часу наш
+    /// запит висить і ми забираємо оновлення.
+    pub poll_conflict_preempt_secs: u64,
 }
 
 /// Політика поведінки при конфлікті поллерів на токені.
@@ -87,6 +94,37 @@ pub enum PollConflictPolicy {
     KeepRunning,
     /// Завершити процес.
     Exit,
+    /// Перехопити токен: не чекати довго, а одразу повторити опитування.
+    ///
+    /// Якщо на токені працює інший полер, Telegram віддає `409` **старшому**
+    /// з двох запитів (перевірено експериментом), а новіший — перемагає.
+    /// Тому достатньо повторити запит небагато згодом після `409`: наш
+    /// запит переб'є чужий, і ми забиратимемо оновлення собі.
+    Preempt,
+}
+
+impl PollConflictPolicy {
+    /// Чи ця політика перехоплює токен (а не просто чекає).
+    pub fn preempts(&self) -> bool {
+        matches!(self, PollConflictPolicy::Preempt)
+    }
+}
+
+/// Пауза перед наступним опитуванням після конфлікту поллерів.
+///
+/// `preempt` — коротка пауза: ми мусимо перебити чужий запит, поки він ще
+/// висить. Інакше — довга пауза, щоб не смикати API зайво.
+pub fn conflict_retry_delay(
+    policy: PollConflictPolicy,
+    preempt_secs: u64,
+    retry_secs: u64,
+) -> std::time::Duration {
+    let secs = if policy.preempts() {
+        preempt_secs
+    } else {
+        retry_secs
+    };
+    std::time::Duration::from_secs(secs.max(1))
 }
 
 impl Default for BotConfig {
@@ -102,6 +140,7 @@ impl Default for BotConfig {
             ref_secret_env: "BOT_REF_SECRET".into(),
             poll_conflict_policy: PollConflictPolicy::default(),
             poll_conflict_retry_secs: 60,
+            poll_conflict_preempt_secs: 2,
         }
     }
 }
@@ -295,5 +334,39 @@ impl Config {
         std::env::var(name).map_err(|_| ConfigError::MissingEnv {
             name: name.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preempt_перехоплює_токен_швидко_а_решта_чекає_довго() {
+        // `preempt` — коротка пауза: наш запит має перебити чужий, поки той
+        // ще висить.
+        assert_eq!(
+            conflict_retry_delay(PollConflictPolicy::Preempt, 2, 60),
+            std::time::Duration::from_secs(2)
+        );
+        // Решта політики — довга пауза, щоб не смикати API.
+        assert_eq!(
+            conflict_retry_delay(PollConflictPolicy::KeepRunning, 2, 60),
+            std::time::Duration::from_secs(60)
+        );
+        assert_eq!(
+            conflict_retry_delay(PollConflictPolicy::Exit, 2, 60),
+            std::time::Duration::from_secs(60)
+        );
+    }
+
+    #[test]
+    fn пауза_не_буває_нульовою() {
+        // Нуль секунд — це «опитувати в циклі без пауз»: Telegram пошле
+        // відмову на такий темп, тож мінімум — одна секунда.
+        assert_eq!(
+            conflict_retry_delay(PollConflictPolicy::Preempt, 0, 0),
+            std::time::Duration::from_secs(1)
+        );
     }
 }
