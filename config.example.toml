@@ -53,6 +53,13 @@ ws_path = "/ws"
 registry_sync_enabled = true
 sync_token_env = "TELEGRAM_SYNC_TOKEN"
 registry_sync_interval_secs = 60
+# Додаткові сервери Wallet Radar, куди теж пишеться реєстр.
+# У мережі буває кілька незалежних екземплярів, і в кожному реєстр — це список,
+# за яким сервер розсилає свої власні алерти. Якщо екземпляр має ввімкнений
+# Telegram, але його реєстр не оновлюється, підписки розходять: нові
+# підписники не отримують серверних алертів.
+registry_sync_extra_urls = []
+# registry_sync_extra_urls = ["http://192.168.2.222:3000"]
 
 [storage]
 backend = "sqlite"               # sqlite | postgres

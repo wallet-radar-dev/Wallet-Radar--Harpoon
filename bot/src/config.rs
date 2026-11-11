@@ -170,6 +170,16 @@ pub struct WrConfig {
     pub registry_sync_enabled: bool,
     /// Як часто синхронізувати реєстр.
     pub registry_sync_interval_secs: u64,
+    /// Додаткові сервери Wallet Radar, куди теж пишеться реєстр.
+    ///
+    /// У мережі буває кілька незалежних екземплярів Wallet Radar, і в кожному
+    /// реєстр — це список, за яким сервер розсилає свої власні алерти. Якщо
+    /// екземпляр має ввімкнений Telegram, але його реєстр не оновлюється,
+    /// підписки розходять: нові підписники не отримують серверних алертів.
+    ///
+    /// Тому можна перелічити адреси додаткових серверів — реєстр піде в
+    /// кожен із них тим самим вузьким токеном `sync_token_env`.
+    pub registry_sync_extra_urls: Vec<String>,
     pub poll_interval_secs: u64,
     pub event_poll_interval_secs: u64,
     pub request_timeout_secs: u64,
@@ -185,6 +195,7 @@ impl Default for WrConfig {
             sync_token_env: "TELEGRAM_SYNC_TOKEN".into(),
             registry_sync_enabled: true,
             registry_sync_interval_secs: 60,
+            registry_sync_extra_urls: Vec::new(),
             poll_interval_secs: 60,
             event_poll_interval_secs: 15,
             request_timeout_secs: 20,
