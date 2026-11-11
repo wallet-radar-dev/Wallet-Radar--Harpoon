@@ -202,6 +202,15 @@ sudo systemctl enable --now wallet-radar-alerts-bot
 journalctl -u wallet-radar-alerts-bot -f
 ```
 
+**Якщо прод на ноутбуку** — кришка не має вводити систему в сон, інакше бот
+зупинить опитування (11 листопада 2026 — 23 години без жодного опитування):
+
+```bash
+sudo mkdir -p /etc/systemd/logind.conf.d
+sudo cp deploy/logind/99-lid-ignore.conf /etc/systemd/logind.conf.d/
+sudo systemctl reload systemd-logind
+```
+
 Юнит працює як `Restart=on-failure`: бот, який завершився через **409** (на
 токені вже працює інший полер), виходить із кодом 0 і **не піднімається
 знову** — інакше виникає цикл старт/409/старт. Падіння (ненульовий код)
@@ -338,8 +347,29 @@ cargo test --workspace
 > # HandleLidSwitch=ignore у /etc/systemd/logind.conf + daemon-reload
 > ```
 >
-> Це зміна системних налаштувань, тож її треба робити свідомо — не зміною
-> ExecStart у юніті бота.
+> **Вирішено (11 листопада 2026).** Створено
+> `/etc/systemd/logind.conf.d/99-lid-ignore.conf`:
+>
+> ```ini
+> [Login]
+> HandleLidSwitch=ignore            # кришка закрита (акумулятор)
+> HandleLidSwitchExternalPower=ignore # кришка закрита (від мережі)
+> HandleLidSwitchDocked=ignore      # кришка закрита, під док-станцією
+> ```
+>
+> Усі три режими — бо одного `HandleLidSwitch=ignore` замало: на акумуляторі
+> кришка все одно вводила б систему в сон. Застосування — `systemctl reload
+> systemd-logind` (сесія не зривається), перевірка — через D-Bus:
+>
+> ```bash
+> busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+>   org.freedesktop.login1.Manager HandleLidSwitch
+> ```
+>
+> `IdleAction` (сон за лицьовим часом) навмисно **не** змінювався: це інше
+> рішення, і кришка була саме тією причиною, через яку бот зупинявся надовго.
+> Якщо потрібен цілодобовий режим і без простою — це вже про перенесення
+> прод-у на ВМ, а не про налаштування ноутбука.
 
 ### Дві копії Wallet Radar
 
