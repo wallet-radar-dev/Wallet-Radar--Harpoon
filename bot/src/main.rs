@@ -436,21 +436,45 @@ async fn main() -> anyhow::Result<()> {
                 "токен синхронізації реєстру не задано — серверні алерти йтимуть за старим списком"
             );
         } else {
-            let sync = Arc::new(registry::RegistrySync::new(
-                store.clone(),
-                &cfg.wr.base_url,
-                &sync_token,
-            ));
-            // Перша синхронізація — відразу, щоб сервер одразу бачив актуальний список.
-            match sync.sync_once().await {
-                Ok(n) => tracing::info!(users = n, "реєстр підключених синхронізовано із сервером"),
-                Err(e) => tracing::warn!(error = %e, "перша синхронізація реєстру не вдалась"),
+            // Основний сервер + додаткові екземпляри Wallet Radar (якщо задані).
+            //
+            // Кожен із них — самостійний сервер зі своїм реєстром і своїм
+            // Telegram-модулем. Реєстр у всіх однаковий, тож синхронізуємо
+            // його в кожен: інакше підписки розходять, а серверні алерти
+            // йдуть за старим списком.
+            let mut targets = vec![cfg.wr.base_url.clone()];
+            for extra in &cfg.wr.registry_sync_extra_urls {
+                let trimmed = extra.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if !targets.iter().any(|t| t == trimmed) {
+                    targets.push(trimmed.to_string());
+                }
             }
-            let stop = stop.clone();
-            let interval = Duration::from_secs(cfg.wr.registry_sync_interval_secs.max(15));
-            tasks.push(tokio::spawn(async move {
-                sync.run(interval, stop, shutdown_registry).await;
-            }));
+
+            for url in targets {
+                let sync = Arc::new(registry::RegistrySync::new(
+                    store.clone(),
+                    &url,
+                    &sync_token,
+                ));
+                // Перша синхронізація — відразу, щоб сервер одразу бачив актуальний список.
+                match sync.sync_once().await {
+                    Ok(n) => {
+                        tracing::info!(server = %url, users = n, "реєстр підключених синхронізовано із сервером")
+                    }
+                    Err(e) => {
+                        tracing::warn!(server = %url, error = %e, "перша синхронізація реєстру не вдалась")
+                    }
+                }
+                let stop = stop.clone();
+                let interval = Duration::from_secs(cfg.wr.registry_sync_interval_secs.max(15));
+                let shutdown_registry = shutdown_registry.clone();
+                tasks.push(tokio::spawn(async move {
+                    sync.run(interval, stop, shutdown_registry).await;
+                }));
+            }
         }
     }
 
