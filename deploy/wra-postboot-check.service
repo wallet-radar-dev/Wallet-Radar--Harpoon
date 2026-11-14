@@ -1,0 +1,16 @@
+[Unit]
+Description=Автотест після ребуту: адреса, резервація, Forgejo-remote, бот
+Documentation=file:///root/src/wallet-radar-alerts-bot/tools/postboot-check.sh
+After=network-online.target forgejo.service wallet-radar-alerts-bot.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Трохи чекаємо: Wi-Fi може підніматися пізніше за Forgejo.
+ExecStart=/bin/sleep 45
+ExecStart=/root/src/wallet-radar-alerts-bot/tools/postboot-check.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
