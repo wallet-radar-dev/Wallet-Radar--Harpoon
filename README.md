@@ -308,6 +308,40 @@ git remote -v
 > * на ВМ `192.168.2.222` (Wallet Radar) remote теж треба оновити на нову
 >   адресу — готовий скрипт `tools/fix-remote-after-ip-change.sh`.
 
+### Автотест після перезавантаження
+
+Після будь-якого ребуту `wra-postboot-check.service` (oneshot, увімкнений)
+через 45 секунд перевіряє, що машина «на місці» і Forgejo-remote знову живий:
+
+| Перевірка | Що доводить |
+|---|---|
+| `boot_id` vs `/var/lib/wra-preboot-id` | завантаження було **справді нове** |
+| `ip` | DHCP-резервація видала ту саму адресу `192.168.2.104` |
+| `reservation` | запис про резервацію досі в роутері |
+| `forgejo_service` | `forgejo.service` піднявся |
+| `git_ls_remote` | Forgejo віддає гілки по SSH |
+| `git_clone` | репозиторій **реально клонується** (не просто «посилання») |
+| `bot_service` / `source_service` | бот і Wallet Radar живі |
+| `source_api` / `source_events` | джерело віддає дані (з авторизацією) |
+| `conflict_409` | немає конкурента-поллера на токені |
+
+Результат — у `/var/log/wra-postboot-check.log` (повний) та
+`/var/lib/wra-postboot-check.result` (коротко, `key=PASS|FAIL`):
+
+```bash
+tail -30 /var/log/wra-postboot-check.log
+cat /var/lib/wra-postboot-check.result
+# або вручну, у будь-який момент:
+bash tools/postboot-check.sh
+```
+
+Щоб наступний ребут теж мав доказ, оновіть «попередній» boot-id одразу перед
+ним:
+
+```bash
+cat /proc/sys/kernel/random/boot_id | sudo tee /var/lib/wra-preboot-id
+```
+
 ---
 
 ## Тести
