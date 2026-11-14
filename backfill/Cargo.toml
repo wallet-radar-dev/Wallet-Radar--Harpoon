@@ -346,10 +346,6 @@ name="memberprofile"
 path="src/memberprofile.rs"
 
 [[bin]]
-name = "botd"
-path = "src/botd.rs"
-
-[[bin]]
 name = "dexswap"
 path = "src/dexswap.rs"
 
