@@ -1,8 +1,14 @@
 [Unit]
 Description=Wallet Radar Alerts Bot — багатокористувацький Telegram-бот з алертами
 Documentation=file:///opt/wallet-radar-alerts-bot/README.md
-After=network-online.target wallet-radar-rust.service
+After=network-online.target wallet-radar-rust.service docker.service
 Wants=network-online.target
+# Сховище — Postgres у контейнері `wr-postgres`; контейнер піднімає сам
+# docker (--restart unless-stopped), тож бот має стартувати після нього.
+# саме Wants, а не Requires: якщо docker перезапустити, бот не має
+# зупинитися назавжди — він упаде з помилкою підключення, і systemd
+# підніме його знову (Restart=on-failure).
+Wants=docker.service
 # Обмеження рестартів: якщо бот падає підряд — не крутимо безкінечний цикл.
 StartLimitIntervalSec=300
 StartLimitBurst=5

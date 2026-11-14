@@ -11,61 +11,8 @@
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row, TransactionBehavior};
-use sha2::{Digest, Sha256};
 
-/// Псевдонім чату: HMAC від chat_id із секретом.
-fn chat_ref_with(secret: &[u8], chat_id: i64) -> String {
-    let mut mac = HmacSha256::new(secret);
-    mac.update(&chat_id.to_le_bytes());
-    format!("chat_{}", &mac.finish_hex()[..16])
-}
-
-/// HMAC-SHA256 — щоб `chat_ref` у аудиті не можна було відновити перебором.
-struct HmacSha256 {
-    inner: Sha256,
-    outer_key: [u8; 64],
-}
-
-impl HmacSha256 {
-    fn new(key: &[u8]) -> HmacSha256 {
-        let mut block = [0u8; 64];
-        if key.len() > 64 {
-            let digest = Sha256::digest(key);
-            block[..32].copy_from_slice(&digest);
-        } else {
-            block[..key.len()].copy_from_slice(key);
-        }
-        let mut ipad = [0x36u8; 64];
-        let mut opad = [0x5cu8; 64];
-        for i in 0..64 {
-            ipad[i] ^= block[i];
-            opad[i] ^= block[i];
-        }
-        let mut inner = Sha256::new();
-        inner.update(ipad);
-        HmacSha256 {
-            inner,
-            outer_key: opad,
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        self.inner.update(data);
-    }
-
-    fn finish_hex(self) -> String {
-        let inner = self.inner.finalize();
-        let mut outer = Sha256::new();
-        outer.update(self.outer_key);
-        outer.update(inner);
-        outer
-            .finalize()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
-    }
-}
-
+use crate::chat_ref::chat_ref_with;
 use crate::{
     now_ms, AlertRecord, AuditEntry, Delivery, DeliveryStatus, DeliveryUpdate, FoldPending,
     Language, NewDelivery, NewUser, Priority, Role, Settings, Store, StoreError, Subscription,

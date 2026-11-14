@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["postgres"]
+# Бекенд PostgreSQL. Без нього бот працює лише з SQLite.
+postgres = ["storage/postgres"]
+
 [lib]
 name = "bot"
 path = "src/lib.rs"
