@@ -1,0 +1,14 @@
+[Unit]
+Description=Оновлення remote Wallet Radar на Forgejo (чекає на ВМ 192.168.2.222)
+Documentation=file:///root/src/wallet-radar-alerts-bot/tools/fix-remote-after-ip-change.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=VM_HOST=192.168.2.222
+Environment=SCRIPT=/root/src/wallet-radar-alerts-bot/tools/fix-remote-after-ip-change.sh
+Environment=MARKER=/var/lib/wra-fix-remote.done
+ExecStart=/root/src/wallet-radar-alerts-bot/tools/watch-and-fix-remote.sh
+# Незалежний від сервісу бота: таймер працює, навіть якщо бот спить.
+TimeoutStartSec=60
