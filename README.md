@@ -288,15 +288,25 @@ git remote -v
 # origin  ssh://git@192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git
 ```
 
-> **Адреса Forgejo — нестабільна.** `SSH_DOMAIN` у `/etc/forgejo/app.ini`
-> вказує IP ноутбука, а IP видається по DHCP і вже змінювався (`.112` → `.104`).
-> Тому:
+> **Адреса Forgejo — тепер зарезервована в DHCP.** `SSH_DOMAIN` у
+> `/etc/forgejo/app.ini` вказує IP ноутбука, а IP видається по DHCP і вже
+> змінювався (`.112` → `.104`). Тому адресу `192.168.2.104` прив'язано до
+> MAC ноутбука в DHCP-роутері (Tenda, `192.168.2.1` → Advanced → Static IP
+> List), тож після будь-якого перезавантаження він знову отримає ту саму
+> адресу, а clone-URL у Forgejo лишатиметься правильним.
 >
-> * після зміни адреси оновити `SSH_DOMAIN` і перезапустити Forgejo:
+> Резервація відтворювана скриптом:
+>
+> ```bash
+> ./tools/reserve-ip-on-router.sh
+> ```
+>
+> Якщо все ж доведеться міняти адресу:
+>
+> * оновити `SSH_DOMAIN` і перезапустити Forgejo:
 >   `sudo systemctl restart forgejo.service`;
 > * на ВМ `192.168.2.222` (Wallet Radar) remote теж треба оновити на нову
->   адресу — готовий скрипт `tools/fix-remote-after-ip-change.sh`;
-> * надійніше — прив'язати статичну адресу в DHCP-броузері.
+>   адресу — готовий скрипт `tools/fix-remote-after-ip-change.sh`.
 
 ---
 
