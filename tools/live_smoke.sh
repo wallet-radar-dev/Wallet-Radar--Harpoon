@@ -77,8 +77,12 @@ severity = "medium"
 EOF
 
 rm -f "$OUT" /tmp/wra-live.db
+# Мок читає MOCK_UPDATES на КОЖНОМУ getUpdates, тож файл можна підмінити
+# посеред прогону — без перезапуску мока.
+UPDATES=/tmp/wra-updates.json
+echo '{"ok":true,"result":[]}' > "$UPDATES"
 echo "→ піднімаю мок Telegram на $MOCK_ADDR"
-"$MOCK_BIN" "$MOCK_ADDR" "$OUT" >/tmp/wra-mock.log 2>&1 &
+MOCK_UPDATES="$UPDATES" "$MOCK_BIN" "$MOCK_ADDR" "$OUT" >/tmp/wra-mock.log 2>&1 &
 MOCK_PID=$!
 trap 'kill $MOCK_PID 2>/dev/null || true' EXIT
 sleep 1
@@ -128,6 +132,34 @@ kill $BOT_PID 2>/dev/null || true
 echo
 echo "=== лог бота (останні 25 рядків) ==="
 tail -25 /tmp/wra-bot.log || true
+
+# Фаза 4: адмінська команда /health — увесь шлях «отримали команду → відповіли»
+# через мок Telegram, з живим Wallet Radar.
+echo
+echo "→ фаза 4: перевіряю /health через мок"
+cat > "$UPDATES" <<'JSON'
+{"ok":true,"result":[{"update_id":9001,"message":{"message_id":9001,"date":1700000000,"chat":{"id":424243,"type":"private"},"from":{"id":424243,"is_bot":false,"first_name":"Smoke","username":"vitalii_vedana"},"text":"/health"}}]}
+JSON
+: > "$OUT"
+start_bot
+sleep 12
+kill -TERM $BOT_PID 2>/dev/null || true
+sleep 1
+kill $BOT_PID 2>/dev/null || true
+
+echo "--- відповідь бота на /health:"
+if [[ -s "$OUT" ]]; then
+  cat "$OUT"
+else
+  echo "(відповіді немає)"
+fi
+if grep -q "Стан бота" "$OUT" 2>/dev/null; then
+  echo "OK: /health відповів (оперативний стан)"
+else
+  echo "FAIL: /health не відповів" >&2
+  exit 1
+fi
+echo '{"ok":true,"result":[]}' > "$UPDATES"
 
 echo
 echo "=== повідомлення, які бот «надіслав» ==="

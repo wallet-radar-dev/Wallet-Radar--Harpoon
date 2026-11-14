@@ -38,6 +38,32 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// «12 хв тому» — якAge для оперативного стану.
+///
+/// Для адмінського `/health`: свіжість важливіша за точність, тому округлюємо
+/// до хвилин. `ts <= 0` — час невідомий (ще не було успішної спроби).
+pub fn fmt_age(now_ms: i64, ts_ms: i64) -> String {
+    if ts_ms <= 0 {
+        return "— (ще не було)".to_string();
+    }
+    let d = now_ms - ts_ms;
+    if d < 0 {
+        return "щойно".to_string();
+    }
+    let min = d / 60_000;
+    if min < 1 {
+        return "щойно".to_string();
+    }
+    if min < 60 {
+        return format!("{min} хв тому");
+    }
+    let h = min / 60;
+    if h < 24 {
+        return format!("{h} год тому");
+    }
+    format!("{} дн тому", h / 24)
+}
+
 /// Тип чату.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatType {
@@ -508,6 +534,9 @@ impl<S: Session, A: AdminService> Router<S, A> {
             "unblock" if self.is_admin(upd.username.as_deref()) => {
                 Some(self.reply(upd, self.cmd_block(upd, &rest, false).await))
             }
+            "health" if self.is_admin(upd.username.as_deref()) => {
+                Some(self.reply(upd, self.cmd_health().await))
+            }
             _ => Some(self.reply(
                 upd,
                 format!(
@@ -801,6 +830,72 @@ impl<S: Session, A: AdminService> Router<S, A> {
             Ok(s) => format!("👥 Підключено: {}", s.recipients),
             Err(e) => format!("Не вдалося: {e}"),
         }
+    }
+
+    /// `/health` (адмін) — оперативний стан «чи зараз усе живо» в одному
+    /// місці: опитування Telegram, джерело, свіжість зрізу, черга.
+    ///
+    /// `/stats` — це накопичені лічильники за весь час роботи. `/health` —
+    /// поточний стан: коли поллер у конфлікті (409), наскільки свіжий
+    /// зріз і чи накопичилась черга на відсилання. Саме цього бракує,
+    /// коли бот «мовчить»: `/stats` показує нулі й не пояснює чому.
+    async fn cmd_health(&self) -> String {
+        let now = now_ms();
+        let mut text = String::from("🩺 Стан бота\n");
+
+        // 1. Опитування Telegram: стан, скільки часу в ньому, остання
+        //    вдала спроба.
+        match &self.poll_health {
+            Some(h) => {
+                text.push_str(&format!(
+                    "• команди: {} · {}\n",
+                    h.state().describe(),
+                    fmt_age(now, h.since_ms())
+                ));
+                text.push_str(&format!(
+                    "• остання вдала спроба: {}\n",
+                    fmt_age(now, h.last_ok_ms())
+                ));
+            }
+            None => text.push_str("• команди: стан невідомий\n"),
+        }
+
+        // 2. Джерело (Wallet Radar) і свіжість зрізу.
+        match self.snapshot.get() {
+            Some(s) => {
+                text.push_str(&format!(
+                    "• джерело: {}\n",
+                    if s.source_reachable {
+                        "доступне"
+                    } else {
+                        "НЕДОСТУПНЕ"
+                    }
+                ));
+                text.push_str(&format!("• зріз: {}\n", fmt_age(now, s.as_of)));
+                if !s.source_reachable {
+                    text.push_str("• секції порожні — алерти не формуються\n");
+                }
+            }
+            None => text.push_str("• джерело: зрізу ще немає\n"),
+        }
+
+        // 3. Черга й доставка.
+        match self.admin.stats().await {
+            Ok(s) => {
+                text.push_str(&format!(
+                    "• черга: {} у черзі · помилок: {} · ретраїв: {} · пропущено: {} · скинуто: {}\n",
+                    s.backlog_pending,
+                    s.messages_failed,
+                    s.messages_retried,
+                    s.messages_skipped,
+                    s.messages_expired
+                ));
+                text.push_str(&format!("• підписників: {}", s.recipients));
+            }
+            Err(e) => text.push_str(&format!("• черга: не вдалося прочитати ({e})")),
+        }
+
+        text
     }
 
     async fn cmd_broadcast(&self, upd: &IncomingUpdate, rest: &str) -> String {
