@@ -5,6 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["postgres"]
+# Бекенд PostgreSQL (sqlx). Вимикається, якщо потрібен лише SQLite —
+# тоді з бінарника не тягнеться драйвер postgres.
+postgres = ["dep:sqlx"]
+
+[[bin]]
+name = "migrate-sqlite-to-postgres"
+path = "src/bin/migrate_sqlite_to_postgres.rs"
+required-features = ["postgres"]
+
 [dependencies]
 rusqlite = { workspace = true }
 serde = { workspace = true }
@@ -13,3 +24,5 @@ thiserror = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+sqlx = { workspace = true, optional = true }
+anyhow = { workspace = true }

@@ -21,6 +21,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use storage::{SqliteStore, Store};
+#[cfg(feature = "postgres")]
+use storage::PostgresStore;
 use telegram_gateway::{
     PollHealth, PollState, Router, RouterConfig, SnapshotCell, TeloxideNotifier, TeloxidePoller,
     UpdateSource,
@@ -122,16 +124,6 @@ async fn main() -> anyhow::Result<()> {
     init_tracing(&cfg.bot.log_level);
 
     // ─── Секрети: тільки з оточення ───────────────────────────────
-    let token = cfg
-        .env(&cfg.bot.token_env)
-        .with_context(|| format!("читаю токен Telegram із змінної {}", cfg.bot.token_env))?;
-    let wr_password = cfg.env(&cfg.wr.password_env).unwrap_or_default();
-
-    // ─── Сховище ────────────────────────────────────────────────────
-    if let Some(dir) = Path::new(&cfg.storage.sqlite_path).parent() {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("створюю каталог {}", dir.display()))?;
-    }
     // Секрет підписування chat_ref: у аудит і логи йде HMAC, а не сам chat_id.
     let ref_secret = cfg.env(&cfg.bot.ref_secret_env).unwrap_or_default();
     if ref_secret.is_empty() {
@@ -140,18 +132,66 @@ async fn main() -> anyhow::Result<()> {
             "секрет підписування chat_ref не задано — у аудиті буде простий хеш"
         );
     }
-    if !cfg.storage.backend.eq_ignore_ascii_case("sqlite") {
-        anyhow::bail!(
-            "поки підтримується лише сховище sqlite, а в конфізі: {}",
-            cfg.storage.backend
-        );
+
+    // ─── Сховище ────────────────────────────────────────────────────
+    //
+    // Бекенд обирається конфігом (`storage.backend`): `sqlite` або `postgres`.
+    // Код один і той самий для обох — різняються лише реалізація трейта
+    // `Store`, яка мономорфізується під час компіляції.
+    match cfg.storage.backend.trim().to_ascii_lowercase().as_str() {
+        "sqlite" => {
+            if let Some(dir) = Path::new(&cfg.storage.sqlite_path).parent() {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("створюю каталог {}", dir.display()))?;
+            }
+            let store = SqliteStore::open_with_secret(
+                &cfg.storage.sqlite_path,
+                ref_secret.as_bytes(),
+                cfg.storage.busy_timeout_ms,
+            )
+            .with_context(|| format!("відкриваю БД {}", cfg.storage.sqlite_path))?;
+            run(cfg, store).await
+        }
+        #[cfg(feature = "postgres")]
+        "postgres" => {
+            let url = cfg
+                .env(&cfg.storage.postgres_url_env)
+                .with_context(|| {
+                    format!(
+                        "читаю URL бази Postgres із змінної {}",
+                        cfg.storage.postgres_url_env
+                    )
+                })?;
+            let store = PostgresStore::connect_with(
+                &url,
+                ref_secret.as_bytes(),
+                cfg.storage.postgres_max_connections,
+                cfg.storage.postgres_connect_timeout_secs,
+            )
+            .await
+            .with_context(|| format!("підключаюся до Postgres {}", redact_url(&url)))?;
+            run(cfg, store).await
+        }
+        other => {
+            anyhow::bail!(
+                "невідомий бекенд сховища: {other} (очікується sqlite або postgres)"
+            )
+        }
     }
-    let store = SqliteStore::open_with_secret(
-        &cfg.storage.sqlite_path,
-        ref_secret.as_bytes(),
-        cfg.storage.busy_timeout_ms,
-    )
-    .with_context(|| format!("відкриваю БД {}", cfg.storage.sqlite_path))?;
+}
+
+/// Основний цикл бота — одна й та сама логіка для будь-якого бекенда сховища.
+///
+/// `S` — конкретна реалізація [`Store`]: SQLite або Postgres.
+async fn run<S>(cfg: Config, store: S) -> anyhow::Result<()>
+where
+    S: Store + Clone + Send + Sync + 'static,
+{
+    // ─── Секрети: тільки з оточення ───────────────────────────────
+    let token = cfg
+        .env(&cfg.bot.token_env)
+        .with_context(|| format!("читаю токен Telegram із змінної {}", cfg.bot.token_env))?;
+    let wr_password = cfg.env(&cfg.wr.password_env).unwrap_or_default();
 
     // ─── Фільтр ────────────────────────────────────────────────────
     let sanitizer = PrivacyFilter::with_options(
@@ -305,7 +345,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         name = %cfg.bot.name,
         wr = %cfg.wr.base_url,
-        db = %cfg.storage.sqlite_path,
+        backend = %cfg.storage.backend,
         "бот запускається"
     );
 
@@ -534,9 +574,9 @@ async fn main() -> anyhow::Result<()> {
 /// Розсильник, який ми використовуємо.
 type Notifier_ = TeloxideNotifier;
 /// Повний тип роутера — щоб не повторювати його в підписах.
-type AppRouter = Router<
-    UserSession<SqliteStore>,
-    admin::Admin<SqliteStore, Arc<Broadcaster<SqliteStore, Notifier_>>>,
+type AppRouter<S> = Router<
+    UserSession<S>,
+    admin::Admin<S, Arc<Broadcaster<S, Notifier_>>>,
 >;
 
 /// Налаштування циклу поллінгу Telegram.
@@ -564,9 +604,9 @@ const POLL_NOTICE_COOLDOWN_MS: i64 = 15 * 60_000;
 ///
 /// Під час конфлікту поллерів сам `/stats` не надійде — сказати про проблему
 /// можна лише окремим повідомленням.
-async fn notify_poll_state(
-    store: &SqliteStore,
-    broadcaster: &Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+async fn notify_poll_state<S: Store + Clone + Send + Sync + 'static>(
+    store: &S,
+    broadcaster: &Arc<Broadcaster<S, TeloxideNotifier>>,
     state: PollState,
 ) {
     let text = match state {
@@ -596,10 +636,10 @@ async fn notify_poll_state(
 }
 
 /// Цикл поллінгу Telegram.
-async fn telegram_loop(
-    store: SqliteStore,
-    router: Arc<AppRouter>,
-    broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+async fn telegram_loop<S: Store + Clone + Send + Sync + 'static>(
+    store: S,
+    router: Arc<AppRouter<S>>,
+    broadcaster: Arc<Broadcaster<S, TeloxideNotifier>>,
     poller: TeloxidePoller,
     stop: Arc<AtomicBool>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
@@ -788,13 +828,13 @@ async fn telegram_loop(
 
 /// Цикл зрізів джерела.
 #[allow(clippy::too_many_arguments)]
-async fn snapshot_loop(
+async fn snapshot_loop<S: Store + Clone + Send + Sync + 'static>(
     wr: WrClient,
     engine: Arc<Mutex<alert_engine::Engine>>,
-    broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+    broadcaster: Arc<Broadcaster<S, TeloxideNotifier>>,
     snapshot_cell: Arc<SnapshotCell>,
     health: Arc<Health>,
-    store: SqliteStore,
+    store: S,
     source: Arc<SourceState>,
     interval: Duration,
     stop: Arc<AtomicBool>,
@@ -857,11 +897,11 @@ async fn snapshot_loop(
 
 /// Цикл стрічки подій: WS + страхувальний REST-поллінг.
 #[allow(clippy::too_many_arguments)]
-async fn event_loop(
+async fn event_loop<S: Store + Clone + Send + Sync + 'static>(
     wr: WrClient,
     engine: Arc<Mutex<alert_engine::Engine>>,
-    broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
-    store: SqliteStore,
+    broadcaster: Arc<Broadcaster<S, TeloxideNotifier>>,
+    store: S,
     health: Arc<Health>,
     ws_path: String,
     poll_interval: Duration,
@@ -923,11 +963,11 @@ async fn event_loop(
 
 /// WS-споживач.
 #[allow(clippy::too_many_arguments)]
-async fn ws_loop(
+async fn ws_loop<S: Store + Clone + Send + Sync + 'static>(
     wr: WrClient,
     engine: Arc<Mutex<alert_engine::Engine>>,
-    broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
-    store: SqliteStore,
+    broadcaster: Arc<Broadcaster<S, TeloxideNotifier>>,
+    store: S,
     health: Arc<Health>,
     ws_path: String,
     stop: Arc<AtomicBool>,
@@ -997,11 +1037,11 @@ struct RestPollCfg {
 }
 
 /// REST-страховка: відновлення подій після розриву й заповнення дірок.
-async fn rest_poll_loop(
+async fn rest_poll_loop<S: Store + Clone + Send + Sync + 'static>(
     wr: WrClient,
     engine: Arc<Mutex<alert_engine::Engine>>,
-    broadcaster: Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
-    store: SqliteStore,
+    broadcaster: Arc<Broadcaster<S, TeloxideNotifier>>,
+    store: S,
     health: Arc<Health>,
     cfg: RestPollCfg,
 ) {
@@ -1060,10 +1100,10 @@ async fn rest_poll_loop(
 }
 
 /// Прийняти події, відфільтрувати дублікати, переоцінити вікна, розіслати.
-async fn ingest(
-    store: &SqliteStore,
+async fn ingest<S: Store + Clone + Send + Sync + 'static>(
+    store: &S,
     engine: &Arc<Mutex<alert_engine::Engine>>,
-    broadcaster: &Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+    broadcaster: &Arc<Broadcaster<S, TeloxideNotifier>>,
     health: &Arc<Health>,
     events: Vec<wr_client::RawEvent>,
 ) {
@@ -1105,8 +1145,8 @@ async fn ingest(
 }
 
 /// Опублікувати алерти.
-async fn publish_all(
-    broadcaster: &Arc<Broadcaster<SqliteStore, TeloxideNotifier>>,
+async fn publish_all<S: Store + Clone + Send + Sync + 'static>(
+    broadcaster: &Arc<Broadcaster<S, TeloxideNotifier>>,
     alerts: &[Alert],
 ) {
     for alert in alerts {
@@ -1226,4 +1266,21 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Приховати пароль у URL бази даних — щоб він не потрапив у логи.
+///
+/// `postgres://user:secret@host/db` → `postgres://user:***@host/db`.
+fn redact_url(url: &str) -> String {
+    match (url.find("://"), url.find('@')) {
+        (Some(scheme_end), Some(at)) if at > scheme_end => {
+            let (creds, rest) = url.split_at(at);
+            let user = match creds.split_once(':') {
+                Some((u, _)) => u,
+                None => creds,
+            };
+            format!("{}://{user}:***{rest}", &url[..scheme_end])
+        }
+        _ => url.to_string(),
+    }
 }

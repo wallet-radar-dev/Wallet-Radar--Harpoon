@@ -207,9 +207,19 @@ impl Default for WrConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
+    /// Бекенд сховища: `sqlite` або `postgres`.
     pub backend: String,
+    /// Шлях до файлу SQLite (використовується, коли `backend = "sqlite"`).
     pub sqlite_path: String,
+    /// Таймаут очікування SQLite-замку (мс).
     pub busy_timeout_ms: u64,
+    /// Ім'я змінної оточення з URL бази Postgres
+    /// (`postgres://user:pass@host:port/db`).
+    pub postgres_url_env: String,
+    /// Розмір пулу з'єднань до Postgres.
+    pub postgres_max_connections: u32,
+    /// Таймаут встановлення з'єднання з Postgres (секунди).
+    pub postgres_connect_timeout_secs: u64,
 }
 
 impl Default for StorageConfig {
@@ -218,6 +228,9 @@ impl Default for StorageConfig {
             backend: "sqlite".into(),
             sqlite_path: "data/bot.db".into(),
             busy_timeout_ms: 5000,
+            postgres_url_env: "POSTGRES_URL".into(),
+            postgres_max_connections: 5,
+            postgres_connect_timeout_secs: 10,
         }
     }
 }

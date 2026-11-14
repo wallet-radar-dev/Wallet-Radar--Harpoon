@@ -111,7 +111,7 @@ Wallet Radar і свіжість зрізу, чергу на відсиланн�
 
 ```
 crates/privacy-filter   санітизація вихідного тексту
-crates/storage          трейт Store + SQLite (WAL), схема, GDPR-видалення
+crates/storage          трейт Store + SQLite (WAL) і Postgres (sqlx), схема, GDPR-видалення
 crates/wr-client        REST + WS до Wallet Radar, типи без адрес
 crates/alert-engine     події + зрізи → алерти (вікна, пороги, alert_key)
 crates/broadcast        durable-черга, ідемпотентність, ретраї, ліміти
@@ -241,12 +241,13 @@ sudo systemctl reload systemd-logind
 
 ```
 /opt/wallet-radar-alerts-bot/
-├── bin/            bot, mock-telegram, import-registry
+├── bin/            bot, mock-telegram, import-registry, migrate-sqlite-to-postgres
 ├── config.toml     без секретів — лише імена змінних оточення
-├── data/bot.db     SQLite (WAL)
+├── data/bot.db     SQLite (WAL) — резервна копія після переходу на Postgres
+├── secrets/        0600: пароль Postgres (джерело POSTGRES_PASSWORD_FILE)
 ├── docs/           DESIGN.md, ARCHITECTURE.md
 └── .env            0600: TELEGRAM_BOT_TOKEN, WR_PASSWORD,
-                    TELEGRAM_SYNC_TOKEN, BOT_REF_SECRET
+                    TELEGRAM_SYNC_TOKEN, BOT_REF_SECRET, POSTGRES_URL
 ```
 
 Перемикання полера зі старого `botd` на новий бот:
@@ -294,6 +295,79 @@ ps aux | grep -E 'botd|alerts-bot' | grep -v grep
 за сигналом зупинки, а не чекає до 25 секунд. Інакше systemd вбив би процес
 (`TimeoutStopSec`), а наступний інстанс отримав би `409` від того, що не
 встиг відпустити з'єднання.
+
+---
+
+## Сховище: Postgres
+
+Бекенд обирається конфігом, а код один і той самий для обох:
+
+```toml
+[storage]
+backend = "postgres"             # sqlite | postgres
+sqlite_path = "/opt/wallet-radar-alerts-bot/data/bot.db"
+postgres_url_env = "POSTGRES_URL"
+postgres_max_connections = 5
+postgres_connect_timeout_secs = 10
+```
+
+URL бази лежить у `.env` (`POSTGRES_URL`), а не в `config.toml` — у конфіг
+потрапляють лише імена змінних оточення.
+
+**База (локально, Docker):**
+
+```bash
+docker run -d --name wr-postgres --restart unless-stopped \
+  -p 127.0.0.1:5433:5432 \
+  -e POSTGRES_USER=wr -e POSTGRES_DB=wallet_radar \
+  -e POSTGRES_PASSWORD_FILE=/run/secrets/pg_password \
+  -v /opt/wallet-radar-alerts-bot/secrets/pg_password:/run/secrets/pg_password:ro \
+  -v wr-postgres-data:/var/lib/postgresql/data \
+  postgres:16-alpine
+```
+
+Пароль зберігається у файлі `secrets/pg_password` (0600, root) і підставляється
+в контейнер через `POSTGRES_PASSWORD_FILE` — тобто пароль не світиться в
+`docker inspect`.
+
+**Перенесення стану з SQLite:**
+
+```bash
+sudo systemctl stop wallet-radar-alerts-bot.service
+cp -a /opt/wallet-radar-alerts-bot/data/bot.db /opt/wallet-radar-alerts-bot/data/bot.db.bak-$(date +%Y%m%d-%H%M%S)
+
+./target/release/migrate-sqlite-to-postgres \
+    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db \
+    --postgres-url "postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_password)@127.0.0.1:5433/wallet_radar"
+```
+
+Мігратор переносить усі таблиці **в одній транзакції** і використовує
+`ON CONFLICT DO NOTHING`, тож повторний запуск безпечний. Перенесені дані:
+3 користувачі, 15 підписок, 13 775 алертів, 996 доставок, 58 806 подій,
+999 снапшотів, курсори (`kv`).
+
+**Перемикання і відкат:**
+
+```bash
+# увімкнути Postgres
+sed -i 's/^backend = .*/backend = "postgres"/' /opt/wallet-radar-alerts-bot/config.toml
+sudo systemctl start wallet-radar-alerts-bot.service
+
+# відкат на SQLite (файл лишається резервною копією)
+sed -i 's/^backend = .*/backend = "sqlite"/' /opt/wallet-radar-alerts-bot/config.toml
+sudo systemctl restart wallet-radar-alerts-bot.service
+```
+
+**Тести проти живої бази:**
+
+```bash
+POSTGRES_TEST_URL="postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_password)@127.0.0.1:5433/wallet_radar_test" \
+    cargo test -p storage --test postgres_store
+```
+
+Без `POSTGRES_TEST_URL` ці тести пропускаються (а не падають). Кожен тест
+працює в окремій схемі (`test_<uuid>`), тож не заважає один одному і не
+чіпає робочу базу.
 
 ---
 
@@ -510,21 +584,27 @@ cargo test --workspace
 ## Обмеження (чесно)
 
 * **`/digest` — добірка за період реалізована**; історія алертів **переживає
-  рестарти**: вона в таблиці `alert_log` (SQLite), тож `/digest daily` заповнює
-  не лише з часу запуску. Перевірено: у базіprod 13 664 алерти з 9 листопада
+  рестарти**: вона в таблиці `alert_log` (Postgres, до переходу — SQLite), тож
+  `/digest daily` заповнює
+  не лише з часу запуску. Перевірено: у базі прод 13 849 алертів (з них 13 775
+  перенесені з SQLite з 9 листопада
   19:31 і донині, а бот за цей час перезапускався. Реальна межа — інша: джерело
   (`/api/events`) тримає лише 500 останніх подій, тож «глибше» за цю вікно
   бот дістати не може.
 * **Курсор джерела.** `/api/events` не має серверного курсора (сервер тримає
   500 подій), тому replay можливий лише в цих межах. При дірі бот позначає
   алерти як неповні (`degraded`) і пише попередження в лог, а не надсилає
-  неповний алерт як повний.
-* **Дайджести не показують статистику підписок** — ані користувачеві, ані
+  неповний алерт як повний.* **Дайджести не показують статистику підписок** — ані користувачеві, ані
   адмінські. Це свідоме рішення, а не недолік.
 * **Асистент (`/api/ask`) вимкнено** за замовчуванням: LLM може процитувати
   сирі дані з джерела.
-* **PostgresStore** не реалізовано — схема розрахована на перенесення, але
-  працює лише SQLite.
+* **PostgresStore реалізовано** і прод уже працює на Postgres: бекенд
+  обирається конфігом (`[storage] backend = "postgres"`), драйвер — `sqlx`
+  (async, без блокування), черга доставок забирається через `FOR UPDATE SKIP
+  LOCKED` — тобто кілька воркерів можуть працювати з однією базою без
+  блокування один одного. SQLite-бекенд лишається доступним (fallback), а
+  мігратор `migrate-sqlite-to-postgres` переносить стан однією транзакцією.
+  Див. розділ «Сховище: Postgres» нижче.
 * **`/api/signals` і `/api/meta-subnets` тепер віддають 200.** Раніше ці маршрути
   існували лише у вихідному коді, а на розгорнутій копії давали 404 — бот
   деградував коректно (секція порожня, попередження в лозі), але сімейні сигнали

@@ -4,10 +4,12 @@
 //!
 //! * доменні типи ([`Role`], [`Language`], [`Timeframe`], [`Topic`] тощо) та абстракція
 //!   persistence — трейт [`Store`];
-//! * конкретна реалізація [`SqliteStore`] поверх SQLite (rusqlite).
+//! * конкретні реалізації: [`SqliteStore`] (SQLite, rusqlite) та [`PostgresStore`]
+//!   (PostgreSQL, sqlx) — друга доступна за feature `postgres`.
 //!
 //! `rusqlite` — синхронна бібліотека, тому кожна операція з базою виконується у
 //! `tokio::task::spawn_blocking`: async-екзекутор ніколи не блокується.
+//! `sqlx` — асинхронний, тому запити до Postgres виконуються напряму.
 //!
 //! Час у всіх полях — UTC, epoch-мілісекунди (`i64`).
 //! SQL-запити завжди параметризовані; логи — через `tracing`.
@@ -16,9 +18,16 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod chat_ref;
 mod sqlite;
 
+#[cfg(feature = "postgres")]
+mod postgres;
+
 pub use sqlite::SqliteStore;
+
+#[cfg(feature = "postgres")]
+pub use postgres::PostgresStore;
 
 /// Поточний час у форматі epoch-мс (UTC).
 ///
@@ -478,6 +487,10 @@ pub enum StoreError {
     /// Помилка роботи з SQLite.
     #[error("помилка SQLite: {0}")]
     Sql(#[from] rusqlite::Error),
+    /// Помилка роботи з PostgreSQL.
+    #[cfg(feature = "postgres")]
+    #[error("помилка PostgreSQL: {0}")]
+    Pg(#[from] sqlx::Error),
     /// Блокуюча задача не завершилась (наприклад, runtime зупинено).
     #[error("помилка виконання блокуючої задачі: {0}")]
     Join(#[from] tokio::task::JoinError),
@@ -498,74 +511,78 @@ pub enum StoreError {
 /// Абстракція сховища стану.
 ///
 /// Реалізація зобов'язана:
-/// * не блокувати async-екзекутор (усі звернення до БД — через `spawn_blocking`);
+/// * не блокувати async-екзекутор (для SQLite — усі звернення до БД через
+///   `spawn_blocking`; для Postgres драйвер асинхронний і блокує сам);
 /// * зберігати час у UTC epoch-мс;
 /// * виконувати лише параметризовані SQL-запити.
+///
+/// Усі майбутні асинхронні методи повертають `Send`-футури: це потрібно,
+/// щоб виклики сховища можна було робити всередині `tokio::spawn`.
 pub trait Store {
     /// Псевдонім чату для аудиту й логів: HMAC від chat_id (без відтворюваного
     /// chat_id у самому значенні).
     fn chat_ref(&self, chat_id: i64) -> String;
     /// Створює або оновлює користувача.
-    fn upsert_user(&self, u: NewUser) -> impl Future<Output = Result<User, StoreError>>;
+    fn upsert_user(&self, u: NewUser) -> impl Future<Output = Result<User, StoreError>> + Send;
     /// Повертає користувача за chat id.
-    fn get_user(&self, chat_id: i64) -> impl Future<Output = Result<Option<User>, StoreError>>;
+    fn get_user(&self, chat_id: i64) -> impl Future<Output = Result<Option<User>, StoreError>> + Send;
     /// Повертає користувача за Telegram user id.
     fn find_user_by_user_id(
         &self,
         user_id: i64,
-    ) -> impl Future<Output = Result<Option<User>, StoreError>>;
+    ) -> impl Future<Output = Result<Option<User>, StoreError>> + Send;
     /// Оновлює налаштування користувача.
     fn set_settings(
         &self,
         chat_id: i64,
         s: &Settings,
-    ) -> impl Future<Output = Result<(), StoreError>>;
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Фіксує часову активність користувача.
-    fn set_last_seen(&self, chat_id: i64, at: i64) -> impl Future<Output = Result<(), StoreError>>;
+    fn set_last_seen(&self, chat_id: i64, at: i64) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Заблокувати/розблокувати користувача (admin-команда /block, /unblock).
     fn set_blocked(
         &self,
         chat_id: i64,
         blocked: bool,
-    ) -> impl Future<Output = Result<(), StoreError>>;
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Повертає підписки користувача.
     fn subscriptions(
         &self,
         chat_id: i64,
-    ) -> impl Future<Output = Result<Vec<Subscription>, StoreError>>;
+    ) -> impl Future<Output = Result<Vec<Subscription>, StoreError>> + Send;
     /// Створює або оновлює підписку.
-    fn set_subscription(&self, s: &Subscription) -> impl Future<Output = Result<(), StoreError>>;
+    fn set_subscription(&self, s: &Subscription) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Видаляє підписку.
     fn remove_subscription(
         &self,
         chat_id: i64,
         topic: Topic,
-    ) -> impl Future<Output = Result<(), StoreError>>;
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Повертає символи активів, за якими стежить користувач.
-    fn user_assets(&self, chat_id: i64) -> impl Future<Output = Result<Vec<String>, StoreError>>;
+    fn user_assets(&self, chat_id: i64) -> impl Future<Output = Result<Vec<String>, StoreError>> + Send;
     /// Додає або прибирає символ активу.
     fn set_user_asset(
         &self,
         chat_id: i64,
         symbol: &str,
         on: bool,
-    ) -> impl Future<Output = Result<(), StoreError>>;
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// Ідемпотентно: `Ok(false)` — такий alert_key уже існує.
-    fn register_alert(&self, a: &AlertRecord) -> impl Future<Output = Result<bool, StoreError>>;
+    fn register_alert(&self, a: &AlertRecord) -> impl Future<Output = Result<bool, StoreError>> + Send;
     /// Чи існує alert_key.
-    fn alert_exists(&self, alert_key: &str) -> impl Future<Output = Result<bool, StoreError>>;
+    fn alert_exists(&self, alert_key: &str) -> impl Future<Output = Result<bool, StoreError>> + Send;
     /// Ставить доставку в чергу (повтор не створює дубля).
-    fn enqueue_delivery(&self, d: NewDelivery) -> impl Future<Output = Result<(), StoreError>>;
+    fn enqueue_delivery(&self, d: NewDelivery) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// claim: атомарно переводить pending→sending і повертає до N записів
     /// (для одного воркера — ORDER BY priority, next_attempt_at).
     fn claim_deliveries(
         &self,
         now: i64,
         limit: u32,
-    ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>>;
+    ) -> impl Future<Output = Result<Vec<Delivery>, StoreError>> + Send;
     /// Фіксує результат спроби доставки.
-    fn finish_delivery(&self, d: DeliveryUpdate) -> impl Future<Output = Result<(), StoreError>>;
+    fn finish_delivery(&self, d: DeliveryUpdate) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Скинути доставки, що провисели в буфері довше за межу.
     ///
     /// Торкається лише `pending`: надіслані, пропущені й невдалі — вже
@@ -574,17 +591,17 @@ pub trait Store {
         &self,
         cutoff_ms: i64,
         reason: &str,
-    ) -> impl Future<Output = Result<usize, StoreError>>;
+    ) -> impl Future<Output = Result<usize, StoreError>> + Send;
     /// Скільки доставок чекає в черзі (буфер).
-    fn count_pending(&self) -> impl Future<Output = Result<i64, StoreError>>;
+    fn count_pending(&self) -> impl Future<Output = Result<i64, StoreError>> + Send;
     /// Активні (не muted, не blocked) чати, які мають підписку на тему, — для розсилки.
-    fn recipients_for(&self, topic: Topic) -> impl Future<Output = Result<Vec<i64>, StoreError>>;
+    fn recipients_for(&self, topic: Topic) -> impl Future<Output = Result<Vec<i64>, StoreError>> + Send;
     /// Кількість активних одержувачів.
-    fn count_recipients(&self) -> impl Future<Output = Result<i64, StoreError>>;
+    fn count_recipients(&self) -> impl Future<Output = Result<i64, StoreError>> + Send;
     /// Усі активні чати (не muted, не blocked, state='active') — для ручної розсилки.
-    fn all_active_chats(&self) -> impl Future<Output = Result<Vec<i64>, StoreError>>;
+    fn all_active_chats(&self) -> impl Future<Output = Result<Vec<i64>, StoreError>> + Send;
     /// Усі користувачі — для синхронізації реєстру на сервер Wallet Radar.
-    fn list_users(&self) -> impl Future<Output = Result<Vec<User>, StoreError>>;
+    fn list_users(&self) -> impl Future<Output = Result<Vec<User>, StoreError>> + Send;
 
     /// Алерти, створені не раніше `since_ms`, — новіші спершу.
     ///
@@ -594,45 +611,45 @@ pub trait Store {
     fn alerts_since(
         &self,
         since_ms: i64,
-    ) -> impl Future<Output = Result<Vec<AlertRecord>, StoreError>>;
+    ) -> impl Future<Output = Result<Vec<AlertRecord>, StoreError>> + Send;
 
     /// Додати сигнал до буфера згортання (повтор із тим самим ключем — ні).
     fn fold_pending_insert(
         &self,
         p: &FoldPending,
-    ) -> impl Future<Output = Result<bool, StoreError>>;
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
     /// Увесь буфер згортання.
-    fn fold_pending_list(&self) -> impl Future<Output = Result<Vec<FoldPending>, StoreError>>;
+    fn fold_pending_list(&self) -> impl Future<Output = Result<Vec<FoldPending>, StoreError>> + Send;
     /// Прибрати з буфера зазначені сигнали (після формування зведення).
     fn fold_pending_remove(
         &self,
         alert_keys: &[String],
-    ) -> impl Future<Output = Result<usize, StoreError>>;
+    ) -> impl Future<Output = Result<usize, StoreError>> + Send;
 
     /// `Ok(true)` — це подія щойно побачена вперше (записано); `Ok(false)` — дублікат.
     fn seen_event(&self, event_id: &str, ts: i64)
-        -> impl Future<Output = Result<bool, StoreError>>;
+        -> impl Future<Output = Result<bool, StoreError>> + Send;
     /// `Ok(true)` — оновлення щойно побачене вперше; `Ok(false)` — дублікат.
-    fn seen_update(&self, update_id: i64) -> impl Future<Output = Result<bool, StoreError>>;
+    fn seen_update(&self, update_id: i64) -> impl Future<Output = Result<bool, StoreError>> + Send;
     /// Читає значення з key-value сховища.
-    fn cursor(&self, name: &str) -> impl Future<Output = Result<Option<String>, StoreError>>;
+    fn cursor(&self, name: &str) -> impl Future<Output = Result<Option<String>, StoreError>> + Send;
     /// Записує значення в key-value сховище.
-    fn set_cursor(&self, name: &str, v: &str) -> impl Future<Output = Result<(), StoreError>>;
+    fn set_cursor(&self, name: &str, v: &str) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     /// Зберігає снапшот стану джерела.
     fn put_snapshot(
         &self,
         as_of: i64,
         payload: &str,
-    ) -> impl Future<Output = Result<(), StoreError>>;
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Повертає останній збережений снапшот.
-    fn last_snapshot(&self) -> impl Future<Output = Result<Option<(i64, String)>, StoreError>>;
+    fn last_snapshot(&self) -> impl Future<Output = Result<Option<(i64, String)>, StoreError>> + Send;
 
     /// Додає запис до журналу аудиту.
-    fn audit(&self, a: AuditEntry) -> impl Future<Output = Result<(), StoreError>>;
+    fn audit(&self, a: AuditEntry) -> impl Future<Output = Result<(), StoreError>> + Send;
     /// Кількість записів аудиту для chat_ref.
-    fn audit_count(&self, chat_ref: &str) -> impl Future<Output = Result<i64, StoreError>>;
+    fn audit_count(&self, chat_ref: &str) -> impl Future<Output = Result<i64, StoreError>> + Send;
     /// GDPR: видаляє юзера (каскадом підписки/активи/доставки) + його аудит.
     /// Повертає, що видалено.
-    fn purge_user(&self, user_id: i64) -> impl Future<Output = Result<Purged, StoreError>>;
+    fn purge_user(&self, user_id: i64) -> impl Future<Output = Result<Purged, StoreError>> + Send;
 }

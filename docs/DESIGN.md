@@ -152,8 +152,19 @@ pub trait Store {
 }
 ```
 
-Реалізації: `SqliteStore` (WAL, `sqlx`), `PostgresStore` (`SKIP LOCKED`). Трейт
-узагальнений, не `dyn` — мономорфізація, два бекенди без динаміки.
+Реалізації: `SqliteStore` (SQLite, `rusqlite`, WAL), `PostgresStore`
+(PostgreSQL, `sqlx`, `FOR UPDATE SKIP LOCKED`). Трейт узагальнений, не `dyn` —
+мономорфізація, два бекенди без динаміки.
+
+Бекенд обирається **під час старту** (конфіг `[storage] backend`), а не на
+етапі компіляції: один бінарник може працювати і з SQLite, і з Postgres, а
+відкат не вимагає перебірки. Код при цьому один — трейт узагальнений за `S`,
+тому компілятор породжує окрему мономорфізацію для кожного бекенда (без
+`dyn`-диспетчеризації).
+
+Усі асинхронні методи трейта повертають `Send`-футури: виклики сховища
+робляться всередині `tokio::spawn`, і без цієї гарантії дженеричний код
+не компілювався б.
 
 ### B.3 `wr-client` — зовнішній сервіс
 
@@ -288,6 +299,12 @@ impl App { pub async fn run(self, cfg: Config, clock: impl Clock) -> Result<()> 
 ---
 
 ## C) Схема БД
+
+Схема одна на обидва бекенди — відмінності лише у типах: у SQLite логічні
+прапорці це `INTEGER` (0/1), у Postgres — `BOOLEAN`; `audit_log.id` у SQLite
+`INTEGER PRIMARY KEY AUTOINCREMENT`, у Postgres — `BIGSERIAL`; у Postgres
+додатково є колонка `users.chat_ref` (HMAC чату). Тому в Postgres частина
+логічних індексів відтворюється частковими (`WHERE user_id IS NOT NULL`).
 
 ```sql
 PRAGMA journal_mode = WAL;
