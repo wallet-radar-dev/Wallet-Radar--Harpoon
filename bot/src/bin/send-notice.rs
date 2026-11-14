@@ -9,14 +9,18 @@
 //!
 //! Використання:
 //! ```text
-//! send-notice <bot.db> <admin_chat_id> <admin_username> <файл із текстом>
+//! send-notice <сховище> <admin_chat_id> <admin_username> <файл із текстом>
 //! ```
+//!
+//! `<сховище>` — шлях до файлу SQLite (`/opt/wallet-radar-alerts-bot/data/bot.db`)
+//! або URL бази Postgres (`postgres://…`). Бот на проді працює на Postgres,
+//! тож інструмент має писати в ту саму чергу, яку читає воркер сервісу.
 
 use admin::Admin;
 use broadcast::{BroadcastConfig, Broadcaster, Notifier, Outbound};
 use privacy_filter::PrivacyFilter;
 use std::sync::Arc;
-use storage::SqliteStore;
+use storage::{PostgresStore, SqliteStore, Store};
 
 /// Заглушка: надсилає саме воркер сервісу, а не цей інструмент.
 struct DeferredNotifier;
@@ -28,12 +32,51 @@ impl Notifier for DeferredNotifier {
     }
 }
 
+/// Основна робота — одна й та сама для будь-якого бекенда сховища.
+async fn run<S>(
+    store: S,
+    admin_chat_id: i64,
+    admin_username: &str,
+    text: &str,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: Store + Clone + Send + Sync + 'static,
+{
+    let sanitizer = PrivacyFilter::new("приховано");
+    let broadcaster = Arc::new(Broadcaster::new(
+        store.clone(),
+        DeferredNotifier,
+        sanitizer.clone(),
+        BroadcastConfig::default(),
+    ));
+    let admin = Admin::new(
+        store,
+        broadcaster,
+        sanitizer,
+        vec![admin_username.to_string()],
+    );
+
+    let queued = admin
+        .broadcast_manual(admin_chat_id, Some(admin_username), text)
+        .await?;
+
+    println!("поставлено в чергу доставок: {queued}");
+    if queued == 0 {
+        println!(
+            "нічого не поставлено: або немає активних підписників, або такий самий \
+             текст уже був розісланий у цю хвилину"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let db_path = args
-        .next()
-        .ok_or("вкажи шлях до БД: send-notice <bot.db> <admin_chat_id> <admin_username> <файл>")?;
+    let target = args.next().ok_or(
+        "вкажи сховище: send-notice <шлях до bot.db | postgres://…> <admin_chat_id> \
+         <admin_username> <файл>",
+    )?;
     let admin_chat_id: i64 = args
         .next()
         .ok_or("вкажи chat_id адміністратора")?
@@ -55,25 +98,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let store = SqliteStore::open(&db_path)?;
-    let broadcaster = Arc::new(Broadcaster::new(
-        store.clone(),
-        DeferredNotifier,
-        sanitizer.clone(),
-        BroadcastConfig::default(),
-    ));
-    let admin = Admin::new(store, broadcaster, sanitizer, vec![admin_username.clone()]);
-
-    let queued = admin
-        .broadcast_manual(admin_chat_id, Some(&admin_username), &report.text)
-        .await?;
-
-    println!("поставлено в чергу доставок: {queued}");
-    if queued == 0 {
-        println!(
-            "нічого не поставлено: або немає активних підписників, або такий самий \
-             текст уже був розісланий у цю хвилину"
-        );
+    // Сховище: SQLite-файл або Postgres-URL. Бекенд визначається за виглядом
+    // аргументу — так інструмент працює з тим самим станом, з якого читає
+    // воркер сервісу.
+    if target.contains("://") {
+        let store = PostgresStore::connect(&target, &[], 2).await?;
+        run(store, admin_chat_id, &admin_username, &report.text).await
+    } else {
+        let store = SqliteStore::open(&target)?;
+        run(store, admin_chat_id, &admin_username, &report.text).await
     }
-    Ok(())
 }

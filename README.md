@@ -190,15 +190,6 @@ TELEGRAM_BOT_TOKEN=dummy WR_PASSWORD=... ./target/release/bot config.toml
   тест `bot/tests/registry_sync.rs`).
 * Для тестових і локальних прогонів — `registry_sync_enabled = false`.
 
-### Міграція зі старого бота
-
-```bash
-# перенести підписників зі старого серверного реєстру в БД нового бота
-./target/release/import-registry \
-    /opt/wallet-tracker/dataset/telegram-users.json \
-    /opt/wallet-radar-alerts-bot/data/bot.db
-```
-
 ### Розсилка оголошення всім підписникам
 
 Одноразовий інструмент `send-notice` ставить ручний алерт у чергу доставок —
@@ -214,8 +205,9 @@ cat > /tmp/notice.txt <<'EOF'
 ...
 EOF
 
+# сховище: URL бази Postgres (як на проді) або шлях до bot.db
 sudo -u ubuntu /opt/wallet-radar-alerts-bot/bin/send-notice \
-    /opt/wallet-radar-alerts-bot/data/bot.db \
+    "$POSTGRES_URL" \
     5801029420 vitalii_vedana /tmp/notice.txt
 # → поставлено в чергу доставок: 3
 ```
@@ -249,7 +241,7 @@ sudo systemctl reload systemd-logind
 
 ```
 /opt/wallet-radar-alerts-bot/
-├── bin/            bot, mock-telegram, import-registry, migrate-sqlite-to-postgres
+├── bin/            bot, mock-telegram, send-notice, migrate-sqlite-to-postgres
 ├── config.toml     без секретів — лише імена змінних оточення
 ├── data/bot.db     SQLite (WAL) — резервна копія після переходу на Postgres
 ├── secrets/        0600: пароль Postgres (джерело POSTGRES_PASSWORD_FILE)
@@ -261,15 +253,11 @@ sudo systemctl reload systemd-logind
 Перемикання полера зі старого `botd` на новий бот:
 
 ```bash
-# 1. старий бот — зупинити й вимкнути
+# 1. старий бот — зупинити, вимкнути й вилучити (його код уже прибрано)
 sudo systemctl disable --now wallet-radar-bot.service
+sudo rm -f /etc/systemd/system/wallet-radar-bot.service
 
-# 2. перенести підписників
-./target/release/import-registry \
-    /opt/wallet-tracker/dataset/telegram-users.json \
-    /opt/wallet-radar-alerts-bot/data/bot.db
-
-# 3. новий сервіс
+# 2. новий сервіс
 sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now wallet-radar-alerts-bot
@@ -650,7 +638,8 @@ VALUES (999999999, 'reaper-probe', 2, 'sending', 0, <now-1000>, <now>, 'тест
 > `wallet-radar-bot.service` — `disabled/inactive`, новий
 > `wallet-radar-alerts-bot.service` — `active + enabled` і працює з
 > **справжнім** токеном. Підписники (3) та їхні підписки (15) перенесені
-> через `import-registry`, серверний реєстр синхронізовано (`users=3`).
+> підписки перенесено зі старого реєстру, серверний реєстр синхронізовано
+> (`users=3`). Код старого бота (`botd`) вилучено.
 >
 > **Конфлікт поллерів (10 листопада 2026) — знайдено причину, конкурент
 > зупинено.** Стороннім полером був **не** бот на Windows, а Linux-сервіс
