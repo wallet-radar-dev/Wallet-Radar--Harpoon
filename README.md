@@ -208,7 +208,7 @@ EOF
 # сховище: URL бази Postgres (як на проді) або шлях до bot.db
 sudo -u ubuntu /opt/wallet-radar-alerts-bot/bin/send-notice \
     "$POSTGRES_URL" \
-    5801029420 vitalii_vedana /tmp/notice.txt
+    <admin_chat_id> <admin_username> /tmp/notice.txt
 # → поставлено в чергу доставок: 3
 ```
 
