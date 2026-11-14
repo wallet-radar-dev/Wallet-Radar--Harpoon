@@ -40,6 +40,10 @@
           class="inline-flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
           <span aria-hidden="true">🕸</span><span data-i18n="graph_btn"></span>
         </button>
+        <button type="button" id="capital-net-btn"
+          class="inline-flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
+          <span aria-hidden="true">💠</span><span data-i18n="cn_btn"></span>
+        </button>
         <button type="button" id="tracer-btn"
           class="inline-flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium px-2 py-1 rounded-lg transition whitespace-nowrap">
           <span aria-hidden="true">🧭</span><span data-i18n="tracer_btn"></span>
@@ -259,6 +263,42 @@
       <div id="graph-tooltip" class="hidden absolute pointer-events-none bg-panel border border-edge rounded-lg px-3 py-2 text-xs shadow-lg z-10"></div>
       <button type="button" id="graph-showall" class="hidden absolute top-3 left-1/2 -translate-x-1/2 bg-panel border border-edge rounded-full px-4 py-1.5 text-xs hover:border-accent transition z-10"></button>
       <div id="graph-detail" class="absolute top-0 right-0 bottom-0 w-80 max-w-[85vw] bg-panel/95 border-l border-edge p-4 overflow-y-auto transition-transform duration-200 translate-x-full z-20"></div>
+    </div>
+  </div>
+
+  <!-- СТРУКТУРА ГРУПИ КАПІТАЛУ: радіальна кластерна мережа (2D / 3D) -->
+  <div id="capital-modal" class="hidden fixed inset-0 z-40 bg-base/95 backdrop-blur flex-col" role="dialog" aria-modal="true" aria-labelledby="capital-modal-title">
+    <div class="flex items-center gap-3 px-5 py-3 border-b border-edge shrink-0">
+      <h3 id="capital-modal-title" class="font-semibold truncate" data-i18n="cn_title"></h3>
+      <span id="cn-status" class="text-xs text-slate-400 truncate"></span>
+      <div class="ml-auto flex items-center gap-1.5">
+        <button type="button" id="cn-mode-2d"
+          class="bg-accent text-white text-xs font-medium px-2.5 py-1 rounded-lg transition">2D</button>
+        <button type="button" id="cn-mode-3d"
+          class="bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2.5 py-1 rounded-lg transition">3D</button>
+        <button type="button" id="cn-filter"
+          class="bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2.5 py-1 rounded-lg transition"
+          data-i18n-title="cn_filter_title" data-i18n-aria="cn_filter_title" aria-label="Фільтр кластерів">🔗</button>
+        <button type="button" id="cn-fit"
+          class="bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2.5 py-1 rounded-lg transition"
+          data-i18n-title="cn_fit_title" data-i18n-aria="cn_fit_title" aria-label="Показати структуру повністю">⌂</button>
+        <button type="button" id="cn-reload"
+          class="bg-panel2 border border-edge hover:border-accent text-xs font-medium px-2.5 py-1 rounded-lg transition"
+          data-i18n-title="cn_reload_title" data-i18n-aria="cn_reload_title" aria-label="Оновити">⟳</button>
+        <button type="button" id="cn-close"
+          class="text-slate-400 hover:text-slate-200 text-2xl leading-none"
+          data-i18n-title="modal_close_title" data-i18n-aria="modal_close_title" aria-label="Закрити">×</button>
+      </div>
+    </div>
+    <div class="relative flex-1 overflow-hidden">
+      <canvas id="cn-canvas" class="absolute inset-0 w-full h-full" role="img" data-i18n-aria="cn_canvas_label"></canvas>
+      <div id="cn-3d" class="absolute inset-0 hidden"></div>
+      <div id="cn-3d-note" class="hidden absolute top-16 left-1/2 -translate-x-1/2 bg-bad/20 border border-bad/40 text-bad text-xs px-3 py-1.5 rounded-lg z-20"></div>
+      <div id="cn-legend" class="absolute top-3 left-3 bg-panel/80 border border-edge rounded-xl p-3 text-xs space-y-1"></div>
+      <div id="cn-stats" class="absolute top-3 right-3 bg-panel/80 border border-edge rounded-xl px-3 py-2 text-xs space-y-0.5"></div>
+      <div class="absolute bottom-3 left-3 text-xs text-slate-500" data-i18n="cn_hint"></div>
+      <div id="cn-tooltip" class="hidden absolute pointer-events-none bg-panel border border-edge rounded-lg px-3 py-2 text-xs shadow-lg z-10"></div>
+      <div id="cn-detail" class="absolute top-0 right-0 bottom-0 w-80 max-w-[85vw] bg-panel/95 border-l border-edge p-4 overflow-y-auto transition-transform duration-200 translate-x-full z-20"></div>
     </div>
   </div>
 
