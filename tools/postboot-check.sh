@@ -197,12 +197,48 @@ else
 fi
 
 if [ "$fail" = "0" ]; then
+    summary="PASS"
     log "ПІДСУМОК: PASS — Forgejo-remote знову працює"
     res "summary" "PASS"
 else
+    summary="FAIL"
     log "ПІДСУМОК: FAIL — є перевірки, що не пройшли (див. вище)"
     res "summary" "FAIL"
 fi
+
+# ── 6. доказ у Forgejo: звіт окремою гілкою ─────────────────────────────────
+# Під час ребуту агент (і SSH-сесія) помре, тож лог на диску — єдиний
+# доказ, який треба читати з машини. Тому додатково пушимо звіт у приватний
+# репозиторій окремою гілкою: його видно у Forgejo-UI навіть без SSH.
+# Клон робимо в тимчасовій директорії, щоб не бруднити робочу копію репозиторію.
+REPORT_BRANCH="postboot-report"
+REPORT_DIR="$(mktemp -d)"
+if timeout 90 git clone --quiet --depth 1 "$SSH_URL" "$REPORT_DIR/r" >/dev/null 2>&1; then
+    {
+        echo "# Звіт автотесту після перезавантаження"
+        echo
+        echo "- Момент (UTC): $(date -u '+%Y-%m-%d %H:%M:%S')"
+        echo "- Boot ID: ${boot_id}"
+        echo "- Попередній boot ID: ${prev_boot_id:-немає}"
+        echo "- Підсумок: ${summary}"
+        echo
+        echo '```'
+        cat "$RESULT"
+        echo '```'
+    } > "$REPORT_DIR/r/docs/postboot-report.md"
+    if git -C "$REPORT_DIR/r" add docs/postboot-report.md >/dev/null 2>&1 \
+       && git -C "$REPORT_DIR/r" -c user.name="postboot-check" -c user.email="postboot@localhost" \
+          commit -q -m "Звіт автотесту після перезавантаження: ${summary}" >/dev/null 2>&1 \
+       && git -C "$REPORT_DIR/r" push -q origin "HEAD:refs/heads/${REPORT_BRANCH}" >/dev/null 2>&1; then
+        log "OK  звіт опубліковано в Forgejo: гілка ${REPORT_BRANCH}"
+    else
+        log "УВАГА не вдалося опублікувати звіт у Forgejo (гілка ${REPORT_BRANCH})"
+    fi
+else
+    log "УВАГА не вдалося склонивати репозиторій для звіту"
+fi
+rm -rf "$REPORT_DIR"
+
 log "=== автотест завершено ==="
 
 # Скрипт завжди завершується з 0: oneshot-юніт не має падати через
