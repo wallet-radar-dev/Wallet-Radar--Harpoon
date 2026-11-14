@@ -215,6 +215,9 @@ pub struct BroadcastStats {
     pub messages_skipped: u64,
     /// Скільки доставок скинуто за межею буфера (алерт застарів).
     pub messages_expired: u64,
+    /// Скільки доставок повернуто в чергу: воркер не встиг зафіксувати
+    /// результат (падав) — рядки «залипали» в `sending`.
+    pub messages_requeued: u64,
 }
 
 /// Згорнуті сигнали, що очікують зведення.
@@ -245,6 +248,7 @@ pub struct BroadcastStatsAtomic {
     pub messages_retried: AtomicU64,
     pub messages_skipped: AtomicU64,
     pub messages_expired: AtomicU64,
+    pub messages_requeued: AtomicU64,
 }
 
 impl BroadcastStatsAtomic {
@@ -259,6 +263,7 @@ impl BroadcastStatsAtomic {
             messages_retried: self.messages_retried.load(Ordering::Relaxed),
             messages_skipped: self.messages_skipped.load(Ordering::Relaxed),
             messages_expired: self.messages_expired.load(Ordering::Relaxed),
+            messages_requeued: self.messages_requeued.load(Ordering::Relaxed),
         }
     }
 }
@@ -622,6 +627,36 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
         Ok(expired)
     }
 
+    /// Повернути в чергу доставки, що застрягли у статусі `sending`.
+    ///
+    /// Воркер переводить доставку в `sending` і фіксує результат
+    /// (`finish_delivery`). Якщо процес упаде між цими кроками, рядок
+    /// назавжди лишиться `sending` — алерт не піде ніколи.
+    ///
+    /// `cutoff_ms` — дедлайн оренди: доставки, чия оренда минула, йдуть
+    /// назад у `pending`, і воркер забере їх знову.
+    ///
+    /// Повертає кількість повернутих рядків.
+    pub async fn requeue_stuck(&self, cutoff_ms: i64) -> Result<usize, BroadcastError> {
+        let requeued = self
+            .store
+            .expire_stuck_sending_before(
+                cutoff_ms,
+                "воркер не зафіксував результат: доставку повернуто в чергу",
+            )
+            .await?;
+        if requeued > 0 {
+            self.stats
+                .messages_requeued
+                .fetch_add(requeued as u64, Ordering::Relaxed);
+            tracing::warn!(
+                requeued,
+                "черга: повернуто доставки, що застрягли у sending"
+            );
+        }
+        Ok(requeued)
+    }
+
     /// Скільки доставок чекає в черзі (буфер).
     pub async fn backlog_pending(&self) -> Result<i64, BroadcastError> {
         Ok(self.store.count_pending().await?)
@@ -742,6 +777,15 @@ impl<S: Store, N: Notifier> Broadcaster<S, N> {
                 Ok(0) => {}
                 Ok(n) => tracing::debug!(count = n, "черга: зведено в дайджест"),
                 Err(e) => tracing::warn!(error = %e, "черга: злиття дайджестів не вдалося"),
+            }
+            // Доставки, що застрягли у `sending` (воркер упав між claim і
+            // finish), повертаються в чергу — інакше вони лишалися б там
+            // назавжди. Робимо це до відбору, щоб застряглі пішли в цьому ж
+            // циклі.
+            match self.requeue_stuck(now).await {
+                Ok(0) => {}
+                Ok(n) => tracing::debug!(requeued = n, "черга: повернуто застряглі доставки"),
+                Err(e) => tracing::warn!(error = %e, "черга: не вдалося повернути застряглі доставки"),
             }
             match self.pump_once(now).await {
                 Ok(0) => {}

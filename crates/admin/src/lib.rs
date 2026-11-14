@@ -41,6 +41,8 @@ pub struct AdminStats {
     pub messages_skipped: u64,
     /// Скільки доставок скинуто за межею буфера.
     pub messages_expired: u64,
+    /// Скільки доставок повернуто в чергу (воркер не зафіксував результат).
+    pub messages_requeued: u64,
     /// Скільки доставок чекає в черзі (буфер) зараз.
     pub backlog_pending: i64,
 }
@@ -114,6 +116,7 @@ impl<S: Store, N: Notifier> AdminBroadcaster for Broadcaster<S, N> {
             messages_retried: s.messages_retried,
             messages_skipped: s.messages_skipped,
             messages_expired: s.messages_expired,
+            messages_requeued: s.messages_requeued,
             backlog_pending: 0,
         }
     }

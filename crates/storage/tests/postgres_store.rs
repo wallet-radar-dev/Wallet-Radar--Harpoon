@@ -507,3 +507,52 @@ async fn буфер_згортання_не_дублює_і_видаляєтьс
     assert_eq!(removed, 1);
     assert!(store.fold_pending_list().await.expect("list").is_empty());
 }
+
+#[tokio::test]
+async fn expire_stuck_sending_before_повертає_застряглі_доставки_в_чергу() {
+    let Some((store, _guard)) = test_store().await else {
+        return;
+    };
+
+    let now = storage::now_ms();
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 500,
+            alert_key: "stuck".to_string(),
+            priority: Priority::Reply,
+            text: "t".to_string(),
+            created_at: now,
+        })
+        .await
+        .expect("enqueue");
+
+    // Воркер забрав доставку і... упав, не зафіксувавши результат.
+    let claimed = store.claim_deliveries(now, 10).await.expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].status, DeliveryStatus::Sending);
+
+    // Оренда ще не минула — reaper не чіпає доставку.
+    let early = store
+        .expire_stuck_sending_before(now + 1_000, "воркер не зафіксував")
+        .await
+        .expect("reaper");
+    assert_eq!(early, 0);
+    assert_eq!(store.count_pending().await.expect("pending"), 0);
+
+    // Оренда минула — доставку повернуто в чергу.
+    let requeued = store
+        .expire_stuck_sending_before(now + 600_000, "воркер не зафіксував")
+        .await
+        .expect("reaper");
+    assert_eq!(requeued, 1);
+    assert_eq!(store.count_pending().await.expect("pending"), 1);
+
+    // Воркер забере її знову.
+    let again = store
+        .claim_deliveries(now + 600_001, 10)
+        .await
+        .expect("повторний claim");
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].alert_key, "stuck");
+    assert_eq!(again[0].attempts, 1, "втрачена спроба врахована");
+}

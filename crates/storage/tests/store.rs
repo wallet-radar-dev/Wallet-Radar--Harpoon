@@ -556,3 +556,97 @@ async fn expire_pending_before_keeps_finished_deliveries() {
         .expect("expire");
     assert_eq!(expired, 0);
 }
+
+#[tokio::test]
+async fn expire_stuck_sending_before_повертає_застряглі_доставки_в_чергу() {
+    let store = SqliteStore::open_in_memory().expect("відкриття БД");
+
+    // Час — реальний: сховище порівнює час з `now_ms()`.
+    let now = storage::now_ms();
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 500,
+            alert_key: "stuck".to_string(),
+            priority: Priority::Reply,
+            text: "t".to_string(),
+            created_at: now,
+        })
+        .await
+        .expect("enqueue");
+
+    // Воркер забрав доставку і... упав, не зафіксувавши результат.
+    let claimed = store.claim_deliveries(now, 10).await.expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].status, DeliveryStatus::Sending);
+
+    // Оренда ще не минула — reaper не чіпає доставку.
+    let early = store
+        .expire_stuck_sending_before(now + 1_000, "воркер не зафіксував")
+        .await
+        .expect("reaper");
+    assert_eq!(early, 0);
+    assert_eq!(store.count_pending().await.expect("pending"), 0);
+
+    // Оренда минула — доставку повернуто в чергу.
+    let requeued = store
+        .expire_stuck_sending_before(now + 600_000, "воркер не зафіксував")
+        .await
+        .expect("reaper");
+    assert_eq!(requeued, 1);
+    assert_eq!(store.count_pending().await.expect("pending"), 1);
+
+    // Воркер забере її знову і може нормально завершити.
+    let again = store
+        .claim_deliveries(now + 600_001, 10)
+        .await
+        .expect("повторний claim");
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].alert_key, "stuck");
+    assert_eq!(again[0].attempts, 1, "втрачена спроба врахована");
+    store
+        .finish_delivery(DeliveryUpdate {
+            chat_id: 500,
+            alert_key: "stuck".to_string(),
+            status: DeliveryStatus::Sent,
+            attempts: 2,
+            next_attempt_at: now + 600_002,
+            error: None,
+        })
+        .await
+        .expect("finish");
+}
+
+#[tokio::test]
+async fn expire_stuck_sending_before_не_чіпає_завершені_доставки() {
+    let store = SqliteStore::open_in_memory().expect("відкриття БД");
+    let now = storage::now_ms();
+
+    store
+        .enqueue_delivery(NewDelivery {
+            chat_id: 600,
+            alert_key: "done".to_string(),
+            priority: Priority::Broadcast,
+            text: "t".to_string(),
+            created_at: now,
+        })
+        .await
+        .expect("enqueue");
+    store
+        .finish_delivery(DeliveryUpdate {
+            chat_id: 600,
+            alert_key: "done".to_string(),
+            status: DeliveryStatus::Sent,
+            attempts: 1,
+            next_attempt_at: now,
+            error: None,
+        })
+        .await
+        .expect("finish");
+
+    // Надіслана доставка не «застрягла» — її не чіпаємо.
+    let requeued = store
+        .expire_stuck_sending_before(now + 600_000, "воркер не зафіксував")
+        .await
+        .expect("reaper");
+    assert_eq!(requeued, 0);
+}

@@ -115,7 +115,14 @@ pub struct PostgresStore {
     pool: PgPool,
     /// Секрет для підписування `chat_ref`.
     secret: Arc<Vec<u8>>,
+    /// Тривалість оренди (lease) доставки: скільки часу рядок у статусі
+    /// `sending` вважається «в роботі». Після цієї межі `sending`-рядок
+    /// повертається в чергу (див. `expire_stuck_sending_before`).
+    lease_ms: i64,
 }
+
+/// Типова тривалість оренди доставки: 5 хвилин.
+pub const DEFAULT_DELIVERY_LEASE_MS: i64 = 300_000;
 
 impl PostgresStore {
     /// Підключається до бази й застосовує схему.
@@ -145,6 +152,7 @@ impl PostgresStore {
         let store = PostgresStore {
             pool,
             secret: Arc::new(secret.to_vec()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         };
         store.migrate().await?;
         Ok(store)
@@ -156,7 +164,18 @@ impl PostgresStore {
         PostgresStore {
             pool,
             secret: Arc::new(secret.to_vec()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         }
+    }
+
+    /// Тривалість оренди доставки (lease), мс.
+    ///
+    /// Скільки часу доставка у статусі `sending` вважається «в роботі».
+    /// Після цієї межі `sending`-рядок повертається в чергу — інакше
+    /// падіння процесу між claim і finish назавжди «залипало» б доставку.
+    pub fn with_lease(mut self, lease_ms: i64) -> Self {
+        self.lease_ms = lease_ms.max(1_000);
+        self
     }
 
     /// Застосовує схему (DDL). Безпечно викликати повторно.
@@ -467,7 +486,7 @@ impl Store for PostgresStore {
                LIMIT $2
                FOR UPDATE SKIP LOCKED
              )
-             UPDATE deliveries d SET status = 'sending'
+             UPDATE deliveries d SET status = 'sending', next_attempt_at = $1 + $3
              FROM claimed c
              WHERE d.chat_id = c.chat_id AND d.alert_key = c.alert_key
              RETURNING d.chat_id, d.alert_key, d.priority, d.status, d.attempts,
@@ -475,6 +494,7 @@ impl Store for PostgresStore {
         )
         .bind(now)
         .bind(i64::from(limit))
+        .bind(self.lease_ms)
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
@@ -516,6 +536,28 @@ impl Store for PostgresStore {
              WHERE status = 'pending' AND created_at < $3",
         )
         .bind(cutoff_ms)
+        .bind(reason)
+        .bind(cutoff_ms)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n as usize)
+    }
+
+    async fn expire_stuck_sending_before(
+        &self,
+        cutoff_ms: i64,
+        reason: &str,
+    ) -> Result<usize, StoreError> {
+        // Тільки `sending`, у яких минув дедлайн оренди: вони лишилися
+        // від воркера, який не зафіксував результат. Повертаємо їх у
+        // `pending` — воркер забере їх знову.
+        let n = sqlx::query(
+            "UPDATE deliveries
+             SET status = 'pending', next_attempt_at = $1, attempts = attempts + 1, last_error = $2
+             WHERE status = 'sending' AND next_attempt_at <= $3",
+        )
+        .bind(now_ms())
         .bind(reason)
         .bind(cutoff_ms)
         .execute(&self.pool)
