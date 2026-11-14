@@ -342,6 +342,10 @@ bash tools/postboot-check.sh
 cat /proc/sys/kernel/random/boot_id | sudo tee /var/lib/wra-preboot-id
 ```
 
+Крім локального логу, автотест пушить звіт у гілку `postboot-report`
+приватного репозиторію — її видно у Forgejo-UI навіть без SSH-доступу до
+машини (у `docs/postboot-report.md`).
+
 ---
 
 ## Тести
