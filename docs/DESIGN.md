@@ -149,8 +149,18 @@ pub trait Store {
 
     fn audit(&self, a: AuditEntry) -> impl Future<Output = Result<()>>;
     fn purge_user(&self, user_id: i64) -> impl Future<Output = Result<Purged>>;
+
+    /// Повернути в чергу доставки, що застрягли у `sending` (воркер упав
+    /// між claim і finish): `sending` → `pending`, `attempts + 1`.
+    fn expire_stuck_sending_before(&self, cutoff_ms: i64, reason: &str)
+        -> impl Future<Output = Result<usize>>;
 }
 ```
+
+Оренда (lease) доставки: при відборі (`claim`) `next_attempt_at` стає
+**дедлайном оренди** (`now + delivery_lease_secs`), а не часом наступної
+спроби. Reaper повертає в чергу ті `sending`-рядки, чий дедлайн минув, — тож
+падіння воркера не губить алерт назавжди.
 
 Реалізації: `SqliteStore` (SQLite, `rusqlite`, WAL), `PostgresStore`
 (PostgreSQL, `sqlx`, `FOR UPDATE SKIP LOCKED`). Трейт узагальнений, не `dyn` —

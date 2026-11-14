@@ -149,7 +149,8 @@ async fn main() -> anyhow::Result<()> {
                 ref_secret.as_bytes(),
                 cfg.storage.busy_timeout_ms,
             )
-            .with_context(|| format!("відкриваю БД {}", cfg.storage.sqlite_path))?;
+            .with_context(|| format!("відкриваю БД {}", cfg.storage.sqlite_path))?
+            .with_lease(lease_ms(&cfg.storage));
             run(cfg, store).await
         }
         #[cfg(feature = "postgres")]
@@ -169,7 +170,8 @@ async fn main() -> anyhow::Result<()> {
                 cfg.storage.postgres_connect_timeout_secs,
             )
             .await
-            .with_context(|| format!("підключаюся до Postgres {}", redact_url(&url)))?;
+            .with_context(|| format!("підключаюся до Postgres {}", redact_url(&url)))?
+            .with_lease(lease_ms(&cfg.storage));
             run(cfg, store).await
         }
         other => {
@@ -1266,6 +1268,11 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Тривалість оренди доставки (lease), мс.
+fn lease_ms(cfg: &bot::config::StorageConfig) -> i64 {
+    (cfg.delivery_lease_secs.max(1) as i64).saturating_mul(1000)
 }
 
 /// Приховати пароль у URL бази даних — щоб він не потрапив у логи.

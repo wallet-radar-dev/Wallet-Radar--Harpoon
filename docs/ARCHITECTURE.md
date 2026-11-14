@@ -523,8 +523,24 @@ CREATE TABLE deliveries (
 CREATE INDEX deliveries_due ON deliveries (status, next_attempt_at);
 ```
 
-Статуси `sending` → `sent/failed` дозволяють відновити чергу після падіння:
-`pending OR (sending AND created_at < now-5min)` → повернути в `pending`.
+Статуси `sending` → `sent/failed` дозволяють відновити чергу після падіння.
+
+**Оренда (lease).** Воркер переводить доставку в `sending` і фіксує результат
+(`finish_delivery`). Якщо процес упаде між цими кроками, рядок лишиться
+`sending` назавжди — алерт не піде ніколи. Тому при claim `next_attempt_at`
+перетворюється на **дедлайн оренди** (`now + delivery_lease_secs`), а не на
+час наступної спроби. Reaper (`expire_stuck_sending_before`) повертає в
+`pending` ті `sending`-рядки, чий дедлайн минув, і збільшує `attempts`
+(втрачена спроба — теж спроба). Викликається в кожному кроці воркера, перед
+відбором доставок, — тож повернутий рядок піде в тому ж циклі.
+
+Тривалість оренди — `[storage] delivery_lease_secs` (типово 300 с). Вона має
+бути помітно більшою за час однієї відправки (секунди), але меншою за час
+життя алерту.
+
+> На Postgres claim виконується `FOR UPDATE SKIP LOCKED`, тож кілька воркерів
+> не забирають ті самі рядки; reaper повертає рядок у `pending` лише якщо
+> його оренда справді минула.
 
 ### 6.2 Ліміти Telegram
 
@@ -957,6 +973,8 @@ ws_path = "/ws"
 backend = "sqlite"                 # sqlite | postgres
 sqlite_path = "data/bot.db"
 busy_timeout_ms = 5000
+postgres_url_env = "POSTGRES_URL"   # URL бази — лише зі змінної оточення
+delivery_lease_secs = 300            # оренда доставки (lease), с
 
 [privacy]
 mask = "приховано"

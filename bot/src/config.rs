@@ -220,6 +220,13 @@ pub struct StorageConfig {
     pub postgres_max_connections: u32,
     /// Таймаут встановлення з'єднання з Postgres (секунди).
     pub postgres_connect_timeout_secs: u64,
+    /// Оренда доставки (lease), секунди.
+    ///
+    /// Скільки часу доставка у статусі `sending` вважається «в роботі».
+    /// Якщо воркер упаде і не зафіксує результат, рядок залишиться
+    /// `sending` — і після цієї межі його повернуть у чергу, щоб алерт
+    /// не загубився назавжди.
+    pub delivery_lease_secs: u64,
 }
 
 impl Default for StorageConfig {
@@ -231,6 +238,7 @@ impl Default for StorageConfig {
             postgres_url_env: "POSTGRES_URL".into(),
             postgres_max_connections: 5,
             postgres_connect_timeout_secs: 10,
+            delivery_lease_secs: 300,
         }
     }
 }

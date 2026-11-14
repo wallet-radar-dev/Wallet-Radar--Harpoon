@@ -802,7 +802,7 @@ impl<S: Session, A: AdminService> Router<S, A> {
     async fn cmd_stats(&self) -> String {
         let mut text = match self.admin.stats().await {
             Ok(s) => format!(
-                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}\n• буфер: {} у черзі · скинуто за межею: {}",
+                "📈 Статистика\n• підключено: {}\n• алертів: {} (дублів відкинуто: {})\n• згорнуто в дайджест: {} (дайджестів: {})\n• надіслано: {} · помилок: {} · ретраїв: {} · пропущено: {}\n• буфер: {} у черзі · скинуто за межею: {} · повернуто із sending: {}",
                 s.recipients,
                 s.alerts_published,
                 s.alerts_duplicate,
@@ -813,7 +813,8 @@ impl<S: Session, A: AdminService> Router<S, A> {
                 s.messages_retried,
                 s.messages_skipped,
                 s.backlog_pending,
-                s.messages_expired
+                s.messages_expired,
+                s.messages_requeued
             ),
             Err(e) => format!("Не вдалося зібрати статистику: {e}"),
         };
@@ -883,12 +884,13 @@ impl<S: Session, A: AdminService> Router<S, A> {
         match self.admin.stats().await {
             Ok(s) => {
                 text.push_str(&format!(
-                    "• черга: {} у черзі · помилок: {} · ретраїв: {} · пропущено: {} · скинуто: {}\n",
+                    "• черга: {} у черзі · помилок: {} · ретраїв: {} · пропущено: {} · скинуто: {} · повернуто: {}\n",
                     s.backlog_pending,
                     s.messages_failed,
                     s.messages_retried,
                     s.messages_skipped,
-                    s.messages_expired
+                    s.messages_expired,
+                    s.messages_requeued
                 ));
                 text.push_str(&format!("• підписників: {}", s.recipients));
             }

@@ -76,7 +76,14 @@ pub struct SqliteStore {
     /// Секрет для підписування `chat_ref`. Порожній — підписування без ключа
     /// (лише хеш): усе одно краще, ніж сам chat_id у логах.
     secret: Arc<Vec<u8>>,
+    /// Тривалість оренди (lease) доставки: скільки часу рядок у статусі
+    /// `sending` вважається «в роботі». Після цієї межі `sending`-рядок
+    /// повертається в чергу (див. `expire_stuck_sending_before`).
+    lease_ms: i64,
 }
+
+/// Типова тривалість оренди доставки: 5 хвилин.
+pub const DEFAULT_DELIVERY_LEASE_MS: i64 = 300_000;
 
 impl SqliteStore {
     /// Відкрити з секретом підписування `chat_ref`.
@@ -98,12 +105,23 @@ impl SqliteStore {
         Ok(SqliteStore {
             conn: store.conn,
             secret: Arc::new(secret.to_vec()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         })
     }
 
     /// Псевдонім чату для аудиту й логів.
     pub fn chat_ref(&self, chat_id: i64) -> String {
         chat_ref_with(&self.secret, chat_id)
+    }
+
+    /// Тривалість оренди доставки (lease), мс.
+    ///
+    /// Скільки часу доставка у статусі `sending` вважається «в роботі».
+    /// Після цієї межі `sending`-рядок повертається в чергу — інакше
+    /// падіння процесу між claim і finish назавжди «залипало» б доставку.
+    pub fn with_lease(mut self, lease_ms: i64) -> Self {
+        self.lease_ms = lease_ms.max(1_000);
+        self
     }
 
     /// Відкриває (або створює) файл бази даних.
@@ -119,6 +137,7 @@ impl SqliteStore {
         Ok(SqliteStore {
             conn: store.conn,
             secret: Arc::new(Vec::new()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         })
     }
 
@@ -129,6 +148,7 @@ impl SqliteStore {
         Ok(SqliteStore {
             conn: store.conn,
             secret: Arc::new(Vec::new()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         })
     }
 
@@ -153,6 +173,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             secret: Arc::new(Vec::new()),
+            lease_ms: DEFAULT_DELIVERY_LEASE_MS,
         })
     }
 
@@ -463,6 +484,7 @@ impl Store for SqliteStore {
     }
 
     async fn claim_deliveries(&self, now: i64, limit: u32) -> Result<Vec<Delivery>, StoreError> {
+        let lease_ms = self.lease_ms;
         self.call(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let rowids: Vec<i64> = {
@@ -482,15 +504,20 @@ impl Store for SqliteStore {
                 tx.commit()?;
                 return Ok(Vec::new());
             }
-            // Атомарний перевід pending -> sending для відібраних рядків.
+            // Атомарний перехід pending -> sending для відібраних рядків.
+            //
+            // `next_attempt_at` тут — не час наступної спроби, а **дедлайн
+            // оренди**: до нього доставка вважається «в роботі». Якщо
+            // процес упаде і не зафіксує результат, рядок лишиться
+            // `sending`, але після дедлайну його поверне reaper.
             {
                 let mut stmt = tx.prepare(
-                    "UPDATE deliveries SET status = 'sending'
+                    "UPDATE deliveries SET status = 'sending', next_attempt_at = ?1 + ?3
                      WHERE rowid IN (SELECT rowid FROM deliveries
                      WHERE status = 'pending' AND next_attempt_at <= ?1
                      ORDER BY priority ASC, next_attempt_at ASC LIMIT ?2)",
                 )?;
-                stmt.execute(params![now, i64::from(limit)])?;
+                stmt.execute(params![now, i64::from(limit), lease_ms])?;
             }
             // Читаємо саме ті рядки, які щойно переведені у sending.
             let placeholders = std::iter::repeat_n("?", rowids.len())
@@ -551,6 +578,27 @@ impl Store for SqliteStore {
                  SET status = 'skipped', next_attempt_at = ?1, last_error = ?2
                  WHERE status = 'pending' AND created_at < ?3",
                 params![cutoff_ms, reason, cutoff_ms],
+            )?;
+            Ok(n)
+        })
+        .await
+    }
+
+    async fn expire_stuck_sending_before(
+        &self,
+        cutoff_ms: i64,
+        reason: &str,
+    ) -> Result<usize, StoreError> {
+        let reason = reason.to_string();
+        self.call(move |conn| {
+            // Тільки `sending`, у яких минув дедлайн оренди: вони лишилися
+            // від воркера, який не зафіксував результат. Повертаємо їх у
+            // `pending` — воркер забере їх знову.
+            let n = conn.execute(
+                "UPDATE deliveries
+                 SET status = 'pending', next_attempt_at = ?1, attempts = attempts + 1, last_error = ?2
+                 WHERE status = 'sending' AND next_attempt_at <= ?3",
+                params![now_ms(), reason, cutoff_ms],
             )?;
             Ok(n)
         })

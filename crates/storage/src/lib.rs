@@ -592,6 +592,22 @@ pub trait Store {
         cutoff_ms: i64,
         reason: &str,
     ) -> impl Future<Output = Result<usize, StoreError>> + Send;
+    /// Повернути в чергу доставки, що застрягли у статусі `sending`.
+    ///
+    /// Доставку переводить у `sending` воркер (claim) і фіксує результат
+    /// (`finish_delivery`). Якщо процес упаде між цими кроками, рядок
+    /// назавжди лишиться `sending` — алерт не піде ніколи.
+    ///
+    /// `cutoff_ms` — межа оренди (lease): доставки, чий дедлайн оренди минув
+    /// до `cutoff_ms`, повертаються у `pending`, і їх знову забере воркер.
+    /// Лічильник спроб при цьому збільшується: втрачена спроба теж спроба.
+    ///
+    /// Повертає кількість повернутих рядків.
+    fn expire_stuck_sending_before(
+        &self,
+        cutoff_ms: i64,
+        reason: &str,
+    ) -> impl Future<Output = Result<usize, StoreError>> + Send;
     /// Скільки доставок чекає в черзі (буфер).
     fn count_pending(&self) -> impl Future<Output = Result<i64, StoreError>> + Send;
     /// Активні (не muted, не blocked) чати, які мають підписку на тему, — для розсилки.

@@ -70,6 +70,10 @@ busy_timeout_ms = 5000
 postgres_url_env = "POSTGRES_URL"
 postgres_max_connections = 5
 postgres_connect_timeout_secs = 10
+# Оренда доставки (lease), секунди: скільки часу рядок у статусі sending
+# вважається «в роботі». Після цієї межі reaper повертає його в чергу —
+# інакше падіння воркера між claim і finish загубило б алерт назавжди.
+delivery_lease_secs = 300
 
 [privacy]
 mask = "приховано"

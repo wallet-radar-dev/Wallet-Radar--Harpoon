@@ -87,6 +87,7 @@ impl MockAdmin {
                 messages_retried: 2,
                 messages_skipped: 0,
                 messages_expired: 0,
+                messages_requeued: 1,
                 backlog_pending: 4,
             },
         }
