@@ -65,6 +65,11 @@ registry_sync_extra_urls = []
 backend = "sqlite"               # sqlite | postgres
 sqlite_path = "data/bot.db"
 busy_timeout_ms = 5000
+# Бекенд Postgres: URL бази береться зі змінної оточення (у конфіг
+# пароль не потрапляє). Напр. postgres://wr:пароль@127.0.0.1:5433/wallet_radar
+postgres_url_env = "POSTGRES_URL"
+postgres_max_connections = 5
+postgres_connect_timeout_secs = 10
 
 [privacy]
 mask = "приховано"
