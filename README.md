@@ -372,6 +372,52 @@ POSTGRES_TEST_URL="postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_p
 Репозиторій: `vitalii/wallet-radar-alerts-bot` (приватний, Forgejo на цій самій
 машині, SSH на порту `2222`).
 
+### Як комітити (один крок замість шести)
+
+```bash
+cd /root/src/wallet-radar-alerts-bot
+./tools/push-all.sh "повідомлення коміту"
+```
+
+Скрипт сам: перевірить гілку й чистоту дерева, покаже, що зміниться,
+закомітить, запушить у **Forgejo** (`origin master` — приватна основна копія)
+і в **GitHub** (`github master:feat/telegram-alerts-bot` — публічна копія), а
+потім звірить, що локальний коміт, Forgejo і GitHub — одна й та сама SHA.
+
+Якщо руками — той самий порядок, нічого не пропускайте:
+
+```bash
+cd /root/src/wallet-radar-alerts-bot
+git switch master                       # пуш можливий лише з master
+git status --short                      # що змінено
+git diff --stat                         # наскільки змінилось
+git add -A && git commit -m "текст"     # коміт
+git push origin master                  # Forgejo (приватний, основний)
+GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
+  git push github master:feat/telegram-alerts-bot   # GitHub (публічний)
+```
+
+Звірка (усі три мають збігатися):
+
+```bash
+git rev-parse master
+git ls-remote origin refs/heads/master
+GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
+  git ls-remote github refs/heads/feat/telegram-alerts-bot
+```
+
+**Якщо push відхилено:**
+* `Updates were rejected` (non-fast-forward) — хтось дописав у гілку на
+  GitHub: `git pull --rebase github feat/telegram-alerts-bot`, розв'язати
+  конфлікти, повторити push;
+* `protected branch` — у GitHub: Settings → Branches → Branch protection rules
+  → зняти захист (зараз захисту немає на жодній гілці);
+* `Permission denied (publickey)` — для Forgejo потрібен ключ за замовчуванням
+  (`/root/.ssh/id_ed25519`), для GitHub — `/root/.ssh/github_key`; не плутайте
+  їх: у скрипті Forgejo перевіряється **без** `GIT_SSH_COMMAND` від GitHub.
+
+
+
 ```bash
 git remote -v
 # origin  ssh://git@192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git
