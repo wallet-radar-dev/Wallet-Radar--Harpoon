@@ -67,8 +67,11 @@ git push github "master:$GITHUB_BRANCH" || fail "GitHub відхилив пуш.
 
 step "6. звірка"
 LOCAL=$(git rev-parse master)
-FORGEJO=$(git ls-remote origin "refs/heads/$FORGEJO_BRANCH" | cut -f1)
-GITHUB=$(git ls-remote github "refs/heads/$GITHUB_BRANCH" | cut -f1)
+# Forgejo — своїм ключем (перевіряємо ДО встановлення ключа GitHub).
+FORGEJO=$(env -u GIT_SSH_COMMAND git ls-remote origin "refs/heads/$FORGEJO_BRANCH" | cut -f1)
+# GitHub — ключем деплою.
+GITHUB=$(GIT_SSH_COMMAND="ssh -i $GITHUB_KEY -o IdentitiesOnly=yes" \
+  git ls-remote github "refs/heads/$GITHUB_BRANCH" | cut -f1)
 echo "локально:  ${LOCAL:0:12}"
 echo "Forgejo:   ${FORGEJO:0:12}"
 echo "GitHub:    ${GITHUB:0:12}"
