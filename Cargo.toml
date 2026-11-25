@@ -11,6 +11,20 @@ members = [
     "crates/admin",
     "bot",
 ]
+# Крейти Wallet Radar живуть у власних окремих workspace (свій Cargo.lock
+# у кожному каталозі), тому корінь цього workspace не має їх перехоплювати —
+# інакше cargo не збирає їх у CI ("current package believes it's in a workspace").
+exclude = [
+    "backfill",
+    "features",
+    "gat",
+    "nextaction",
+    "patterns",
+    "rust-server",
+    "satellite",
+    "wr-dict",
+    "wr-store",
+]
 
 [workspace.package]
 version = "0.1.0"
