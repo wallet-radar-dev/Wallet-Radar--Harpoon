@@ -1,739 +1,622 @@
-# Wallet Radar Alerts Bot
+<a name="en"></a>
 
-Окремий Telegram-бот фінансових алертів: читає Wallet Radar як **зовнішній
-read-only сервіс** (REST + WebSocket), розсилає ринкові сигнали всім
-підключеним користувачам і відповідає на запити — **приватно, тільки автору**.
+<div align="center">
 
-У коді Wallet Radar цей бот не вбудовується: він говорить з ним по HTTP/WS
-як з будь-яким зовнішнім сервісом.
+# 📡 Wallet Radar
 
----
+<a href="#en"><img src="https://img.shields.io/badge/English-4C8DFF?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2MCAzMCI%2BPGNsaXBQYXRoIGlkPSJ0Ij48cGF0aCBkPSJNMzAsMTVoMzB2MTV6djE1aC0zMHpoLTMwdi0xNXp2LTE1aDMweiIvPjwvY2xpcFBhdGg%2BPHBhdGggZD0iTTAsMHYzMGg2MHYtMzB6IiBmaWxsPSIjMDEyMTY5Ii8%2BPHBhdGggZD0iTTAsMEw2MCwzME02MCwwTDAsMzAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSI2Ii8%2BPHBhdGggZD0iTTAsMEw2MCwzME02MCwwTDAsMzAiIGNsaXAtcGF0aD0idXJsKCN0KSIgc3Ryb2tlPSIjQzgxMDJFIiBzdHJva2Utd2lkdGg9IjQiLz48cGF0aCBkPSJNMzAsMHYzME0wLDE1aDYwIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNMzAsMHYzME0wLDE1aDYwIiBzdHJva2U9IiNDODEwMkUiIHN0cm9rZS13aWR0aD0iNiIvPjwvc3ZnPg%3D%3D" alt="English" height="28"></a>&nbsp;<a href="#ua"><img src="https://img.shields.io/badge/%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D1%81%D1%8C%D0%BA%D0%B0-E6EAF0?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMCAyMCI%2BPHJlY3Qgd2lkdGg9IjMwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjMDA1N0I3Ii8%2BPHJlY3QgeT0iMTAiIHdpZHRoPSIzMCIgaGVpZ2h0PSIxMCIgZmlsbD0iI0ZGRDcwMCIvPjwvc3ZnPg%3D%3D" alt="Українська" height="28"></a>
 
-## Що бот показує, а що — ніколи
+### What smart money is doing — in one screen.
 
-| Дозволено | Заборонено (і не реалізовано в типах) |
-|---|---|
-| Назви активів, мережа | Адреси гаманців |
-| Напрям: накопичення / розподіл | tx-hash |
-| Агрегати: учасники, сума за вікно, частка емісії групи, концентрація top-10 | Суми окремих транзакцій |
-| Архетипи, сектори, ринкові сигнали | Explorer-посилання з конкретною адресою або tx |
+A multi-chain on-chain intelligence terminal for retail traders: whale accumulation,
+coordinated capital groups, pump phases and liquidations, all on one screen.
 
-Захист побудований на трьох незалежних шарах:
+![Status](https://img.shields.io/badge/status-beta-FBBF24?style=flat-square)
+![Rust](https://img.shields.io/badge/backend-Rust-DEA584?style=flat-square&logo=rust&logoColor=white)
+![TypeScript](https://img.shields.io/badge/frontend-TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Solana](https://img.shields.io/badge/Solana-supported-14F195?style=flat-square&logo=solana&logoColor=white)
+![License](https://img.shields.io/badge/license-proprietary-8A97B4?style=flat-square)
 
-1. **Типовий шар (головний).** `wr-client` — єдиний крейт, який бачить сирі
-   відповіді API. Він копіює лише перелічені поля; адреси (`root`,
-   `members[].address`, `counterparty`, `contract`) у типи просто не потрапляють,
-   а з груп і родин лишається лише хеш складу. Структури `Alert`/`Metrics`
-   **не мають поля, куди можна покласти адресу** — отже, текст алерту фізично
-   не може її показати.
-2. **Whitelist полів на вході.** Ключі з denylist (`address`, `txHash`,
-   `counterparty`, `contract`, `root`, `walletId`, …) відкидаються на розборі;
-   їх наявність логується для спостереження.
-3. **Санітизація на виході.** `privacy-filter` пропускає кожне повідомлення
-   перед Telegram: EVM-адреси, tx-hash, base58-адреси Solana, ENS, explorer-URL.
-   Адміністраторський `/broadcast` проходить те саме.
+<img src="docs/screenshots/preview.jpg" alt="Wallet Radar: network selection for a wallet and an on-chain connection graph" width="900">
 
-Головна гарантія — тест `bot/tests/golden.rs`: мок-джерело віддає фікстури зі
-справжніми за формою адресами, бот повністю проходить цикл, а потім
-перевіряється, що **жодне** вихідне повідомлення не містить забороненого токена
-**і** що фільтр нічого не змінив (тобто спрацював типовий шар, а не regex).
+<sub>Pick any of 14 networks for a wallet (left) and explore its on-chain connection graph (right). The UI is shown in Ukrainian; 5 languages are available.</sub>
+
+</div>
 
 ---
 
-## Можливості
+<div align="center">
 
-**Алерти (усім підключеним):** накопичення/розподіл китів у активах, зміни
-складу капітал-груп, cross-asset аномалії, сплески ліквідацій. Доставка з
-ідемпотентністю (той самий доказ → той самий `alert_key` → дубль відкидається
-до того, як хтось щось отримає), ретраї з backoff, черга в БД.
+<table>
+  <tr>
+    <td align="center" width="140"><a href="#en-about">📦<br><b>About</b></a></td>
+    <td align="center" width="140"><a href="#en-what">🎯<br><b>What it does</b></a></td>
+    <td align="center" width="140"><a href="#en-arch">🏗<br><b>Architecture</b></a></td>
+    <td align="center" width="140"><a href="#en-langs">🧬<br><b>Languages</b></a></td>
+    <td align="center" width="140"><a href="#en-migration">🦀<br><b>Rust migration</b></a></td>
+    <td align="center" width="140"><a href="#en-run">🚀<br><b>Running</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="140"><a href="#en-config">⚙️<br><b>Configuration</b></a></td>
+    <td align="center" width="140"><a href="#en-api">🔌<br><b>API</b></a></td>
+    <td align="center" width="140"><a href="#en-structure">🗂<br><b>Structure</b></a></td>
+    <td align="center" width="140"><a href="#en-tests">🧪<br><b>Testing</b></a></td>
+    <td align="center" width="140"><a href="#en-license">📄<br><b>License</b></a></td>
+    <td align="center" width="140"><a href="#ua">🌐<br><b>Українська</b></a></td>
+  </tr>
+</table>
 
-**Згортання широких сигналів:** якщо один і той самий сигнал доходить до
-заданої частки активних користувачів (`digest_threshold_pct`), він не
-розсилається окремими повідомленнями, а згортається в одне зведене
-повідомлення за вікно (`digest_window_secs`). Групування — за видом сигналу
-та вікном агрегації: двадцять різних активів у cross-asset дають одне
-повідомлення, а не двадцять. Вузькі (персональні) сигнали лишаються
-детальними й негайними, а сигнал, що доходить лише до однієї людини, не
-згортається ніколи. Буфер згорнутих сигналів живе **у БД**, тож перезапуск
-процесу їх не втрачає.
+</div>
 
-**Приватні відповіді:** `/assets`, `/groups`, `/signal <SYMBOL>`,
-`/digest daily|weekly`, `/settings`, `/mute`, `/unmute`, `/language uk|en`,
-`/delete` (GDPR-видалення власних даних).
+<a name="en-about"></a>
+## 📦 About this repository
 
-**`/digest` — добірка алертів за період:** скільки сигналів було за добу або
-тиждень, за які теми, які активи та які найважливіші. Джерело — журнал
-`alert_log`, де лежать **агрегати**, тому добірка принципово не може містити
-адрес чи сум окремих транзакцій. Фільтри — ті самі, що й для живих доставок:
-підписки на теми, мінімальна важливість, відстежувані активи; мова —
-користувача.
+This is the **engine without the data**: the analysis code, not its results. Deliberately **not** included:
 
-**Буфер черги під час збою джерела:** поки Wallet Radar недоступний, черга
-розсилки **буферизується** — доставки не надсилаються, а накопичуються (у
-БД, тож перезапуск їх не втрачає). Коли джерело оживає, буфер виливається.
-Але накопичене не вічно: доставка, що провисела в черзі довше за
-`max_backlog_minutes`, скидається і **не надсилається ніколи** — вікно
-агрегації застаріло, а «кит накопичував 2 години тому» — не інформація, а
-шум. `0` вимикає обмеження (буфер безстроковий). Стан видно в `/stats`:
-«буфер: N у черзі · скинуто за межею: M».
+- `dataset/` — collected research data (tens of thousands of addresses);
+- `server/` — the legacy Node backend being phased out (Rust is the source of truth);
+- golden test fixtures (`rust-server/tests/fixtures/`) — they are snapshots of real data;
+- internal reports, session notes and the infrastructure runbook.
 
-**Reaper застряглих доставок.** Воркер переводить доставку в `sending` і
-фіксує результат; якщо процес упаде між цими кроками, рядок лишиться
-`sending` назавжди — алерт не піде ніколи. Тому при відборі доставка
-отримує **оренду** (`[storage] delivery_lease_secs`, типово 300 с): коли
-дедлайн оренди минає, рядок повертається в чергу і воркер бере його знову.
-Лічильник — у `/stats` («повернуто із sending: N») і в лозі («черга:
-повернуто доставки, що застрягли у sending»).
+Reference data (exchange addresses, thresholds, groups, strategy parameters) lives in **SQLite**
+(the `wr-store` crate), not in the code — see `wr-store/migrations/`. Without the database the
+application **refuses to start and explains what to do** instead of running on zeros; a database
+that lacks required tags starts, but logs exactly what is missing. Populate it with `wr-import load`
+from the authors' seed files (`wr-import extract` needs the full repository history, which the
+public version does not have).
 
-**Адмін:** `/broadcast`, `/stats`, `/users`, `/block`, `/unblock`, `/health`. Кожна
-дія — в аудит (без PII: у лог іде HMAC-підпис chat_id, а не сам chat_id).
-`/stats` показує й стан опитування Telegram: «команди: працюють» або «недоступні —
-на токені вже працює інший поллер (409)».
+> [!NOTE]
+> The public version also lacks `rust-server/src/groupgraph.rs` and part of the `nextaction`
+> binaries (29 of the 73 listed in `Cargo.toml`), so these crates do not build without them.
 
-**`/health` — «чи зараз усе живо» в одному екрані.** `/stats` — це накопичені
-лічильники за весь час роботи; `/health` — поточний стан, саме те, чого бракує,
-коли бот «мовчить»:
+<a name="en-bot"></a>
+## 📨 Telegram alerts bot (a separate service)
+
+The Telegram bot is a separate product, `wallet-radar-alerts-bot`, that talks
+to Wallet Radar exactly like any other external service: **read-only, over
+REST + WebSocket** (`/api/signals`, `/api/events`, `/api/meta-subnets`).
+The bot modifies nothing here. Its code lives in this tree (`crates/*`,
+`bot/`), and its own documentation — [`README-alerts-bot.md`](README-alerts-bot.md).
+
+- **Where the code is:**
+  - this repository (merged via PR #13 from the branch
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
+    — the public copy;
+  - the private repository `vitalii/wallet-radar-alerts-bot` in our Forgejo
+    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — the
+    working copy.
+- **Why it is separate:** the old in-tree poller (`botd`) was removed in
+  `e2e777a` — two bots sharing one Telegram token were the source of 409
+  poller conflicts. The new bot runs as its own systemd unit, with its own
+  token and its own state.
+- **Runtime:** a Rust workspace (`crates/*`, `bot/`); storage in **Postgres**
+  through `sqlx` (the delivery queue is claimed with `FOR UPDATE SKIP LOCKED`),
+  with SQLite kept as a fallback. Deployed to `/opt/wallet-radar-alerts-bot`,
+  unit `wallet-radar-alerts-bot.service`, secrets in its own `.env`
+  (`TELEGRAM_BOT_TOKEN`, `POSTGRES_URL`, …).
+- **Privacy by construction:** neither outgoing messages nor the database
+  contain real addresses or transaction hashes — the `root` address from
+  `/api/signals` is hashed client-side into an `opaque_id`.
+- **Commands:** `/assets`, `/groups`, `/signal <SYMBOL>`, `/digest daily|weekly`,
+  `/settings`, `/mute`, `/unmute`, `/language uk|en`; admin: `/broadcast`,
+  `/stats`, `/users`, `/block`, `/unblock`, `/health`. The assistant
+  (`/api/ask`) is **disabled by default**, because an LLM can quote raw source
+  data.
+
+<a name="en-what"></a>
+## 🎯 What it does
+
+Tracks wallets across many networks:
+
+- **balances and portfolio** with a chart, a **live event feed**;
+- **connection graph** (the "web"), **Tracer** (fund-flow tracing), **Alerts** (notification rules);
+- **entity profiles**, a configurable **Dashboard**;
+- **search** across assets and addresses on every network;
+- a **5-language** interface.
+
+The key feature is **detection of "desks" and capital groups**: finding coordinated whales,
+merging sub-networks, classifying archetypes, monthly activity, and an intelligence page with a
+live force graph (`/network.html`).
+On the main screen, the **Capital groups** block shows each group's share of controlled
+emission and its core/holder composition, with tabs to check the on-chain path between
+members and their coordination (common funders).
+
+<a name="en-arch"></a>
+## 🏗 Architecture
+
+**Production is Rust.** The backend, the backfill and all background analytics run in Rust.
+The legacy Node server is kept in the authors' working tree **only as a parity oracle** for
+`parity_check`; it does not run in production and is not part of the public repository.
+Details: [Languages](#en-langs).
+
+```mermaid
+flowchart LR
+    B["🌐 Browser<br/>web/ · TypeScript"] -- "HTTP + WebSocket :3000" --> CORE
+
+    subgraph CORE ["rust-server · axum + tokio · systemd"]
+        API["96 API routes · WS feed<br/>18 background workers"]
+        DB[("wr-store<br/>SQLite reference data")]
+        API --- DB
+    end
+
+    CORE -- "public, keyless" --> PUB["Blockscout ×24 EVM · Solana RPC<br/>TronGrid · mempool.space<br/>CoinGecko · DefiLlama · Bybit WS"]
+    CORE -- "gRPC + mTLS (tonic)" --> SAT["🛰 satellite × N<br/>hold the API keys"]
+    SAT --> KEYED["Etherscan · Moralis · Arkham<br/>Glassnode · LunarCrush"]
+    CORE --> TG["📨 Telegram alerts"]
+```
+
+**Security model (deliberate): the core holds no keys.** Every call to a paid or keyed API goes
+over gRPC + mTLS to a satellite, which injects the key from its own environment. `Fetch` in
+`proto/satellite.proto` is intentionally generic — the satellite returns the provider's body
+**byte for byte**, so the golden-tested parsers of the core stay untouched. Providers come only
+from an allowlist; an arbitrary host cannot be passed (SSRF protection).
+
+<a name="en-langs"></a>
+## 🧬 Languages
+
+What is written in what, and what **actually runs in production**:
+
+| Component | Language | Prod? | Role |
+|---|---|---|---|
+| `rust-server/` | **Rust** | ✅ yes | Backend :3000 — 96 API routes, WS, 18 background workers. The main process. |
+| `backfill/` | **Rust** | ✅ yes | Backfill into Elasticsearch (`backfill2`) + binaries `relay-monitor`, `supply`, `eth-*`, `btc-*`, `distrib-alert`… |
+| `nextaction/` | **Rust** | ✅ yes | Analytics binaries (73 in `Cargo.toml`): `strategy`, `volatility`, `sector`, `rotation`, `pnl`, `cohort`, `capgroups`, `rg*`, `train`, `merge-graph`… |
+| `features/` | **Rust** | ✅ yes | Feature extraction, family clustering, `model`. |
+| `satellite/` | **Rust** | ✅ yes | Key-holding proxy (gRPC/mTLS). |
+| `gat/` | **Rust** | ⏸ offline | Graph Attention Network (ML), separate Dockerfile. |
+| `web/` (`src/*.ts`) | **TypeScript** | ✅ yes | Frontend. Compiled to the browser `app.js` (esbuild) — **cannot be Rust by definition**. |
+| `deploy/*.sh`, `diskguard.sh` | **Shell** | ✅ yes | Cron glue: schedules and runs the Rust binaries. |
+| `deploy/group-monitor.py` | **Python** | ⚠️ **yes** | **The only functional non-Rust code in production.** Daily Telegram digest for 2 groups. A porting candidate (see below). |
+| `server/*.js`, `*.mjs` | **Node** | ❌ **no** | Legacy implementation, **not run**. Oracle for `parity_check`. Not in the public repository. |
+| `scripts/`, `tools/gen_*` | **Node** | 🔧 build | Helpers: `stamp-assets.mjs`, golden-fixture generators. |
+| `test/*.test.ts` | **TypeScript** | 🧪 CI | Tests via `node --test`. Not in the public repository. |
+
+<a name="en-migration"></a>
+## 🦀 Rust migration status
+
+The port from Node to Rust is **effectively complete**:
+
+- **Rust serves 96 API routes — a superset of the 70 legacy Node routes.** No functionality was lost; Rust has more.
+- **`parity_check`** (a binary in `rust-server/src/bin/`) compares key routes **byte for byte** between Node and Rust. It is a safeguard: while it is green, Rust is guaranteed not to have drifted from the verified behaviour of earlier iterations. That is why `server/` is kept alive as a reference.
+- Even the Python version of the parity checker has been ported to Rust (`tools/parity_check.py` removed).
+
+**What is still not Rust, and why:**
+
+1. **`deploy/group-monitor.py`** — the only non-Rust runtime. It crawls ETH ERC-20 incrementally for the cores of 2 groups and sends a Telegram delta. The port is realistic: Rust already has overlapping binaries (`netflow`, `emission`, `distrib-alert`) and `telegram.rs`. ⚠️ An extra motive: the script reads `.env` **directly**, i.e. it bypasses the "keyless core" model. A Rust binary going through a satellite would close that too.
+2. **Frontend (`web/src`)** — browser code, not portable to Rust (except via WASM, which is not worth it).
+3. **Shell glue** — fine as a scheduler; rewriting it in Rust makes little sense.
+4. **Node `server/` + `.mjs`** — intentionally kept as the parity oracle. Deleting it would remove the safeguard against regressions, so it is **not touched**.
+
+<a name="en-run"></a>
+## 🚀 Running
+
+### Production (how it runs on the server)
+
+The backend is a systemd service, not Docker and not `npm start`:
+
+```bash
+# build the release
+cd rust-server && cargo build --release
+
+# manage the service (unit: deploy/wallet-radar-rust.service)
+systemctl status  wallet-radar-rust.service      # main backend :3000
+systemctl restart wallet-radar-rust.service
+journalctl -u wallet-radar-rust.service -f       # logs
+
+# background Rust jobs — systemd timers and crontab (deploy/*.sh)
+systemctl list-timers 'wallet-*'
+crontab -l
+```
+
+### Frontend
+
+Sources: `web/src/*.ts` + `web/tw-input.css`. Build before serving:
+
+```bash
+npm install
+npm run build     # typecheck (tsc) + esbuild (web/src/main.ts → web/app.js) + tailwind + stamp-assets
+```
+
+The Rust server serves the `web/` static files and the API from the same port `:3000`.
+
+### Local Docker (whole stack)
+
+```bash
+cp deploy/.env.example deploy/.env   # satellite API keys (empty is fine: they report configured=false)
+docker compose up --build            # http://localhost:3000
+```
+
+The only manual step is `deploy/.env` (compose fails if it is missing, and `*.env` is gitignored).
+
+This starts `pki-init` (one-shot: issues the mTLS certificates into `deploy/pki/out`), `store-init`
+(one-shot: creates the reference database), both satellites, and the Rust core with the built
+frontend. The core runs in strict satellite mode, like production. Only the four key-free workers
+from `.env.example` are on by default; production runs all 20 (including a ~204 GB backup worker),
+so enable the rest in `.env` on purpose. Optional core secrets (Telegram, Sentry, passwords) go
+into a root `.env`.
+
+**Database.** The reference store is an embedded SQLite file (`wr-store`, `WR_DB`), not a database
+server — Postgres/MS SQL are not supported by the code. `store-init` creates it in the `store`
+volume, picking the first available source in `./seed/`:
+1. `wallet-radar.db` — a ready database from the authors, copied as is;
+2. `constants.json`, `real-money.json`, `universe.json`, … — the authors' seed files, loaded with `wr-import load`;
+3. nothing — an **empty, migrated** database (`wr-import init`). The UI starts, but there are no
+   wallets, groups, thresholds or tags, and the keyed sources stay empty. The core logs the missing tags.
+
+The public repository contains neither (1) nor (2), so a plain clone gets (3). To switch to real
+data, put the files into `./seed/` and run `docker compose down -v && docker compose up` — an existing
+database is never overwritten, so `-v` is required. `rust-server/src/groupgraph.rs` is a stub in the
+public version: `/api/group-graph` answers `501`.
+
+<a name="en-config"></a>
+## ⚙️ Configuration and secrets
+
+- **`.env`** (mode `600`, in `.gitignore`) — only the core's own secrets: passwords, `TELEGRAM_BOT_TOKEN`, `SENTRY_DSN`, `ADMIN_PASSWORD` / `APP_PASSWORD`.
+- **The core's `.env` has NO keys for Etherscan / Moralis / Arkham / Glassnode / LunarCrush** — the satellites hold them (`deploy/docker-compose.satellites.yml` + `deploy/.env`, see [`docs/satellites.md`](docs/satellites.md)).
+- **mTLS PKI** for the satellites — `deploy/pki/out/` (in `.gitignore`).
+- Background workers are switched on one by one with `ENABLE_*_WORKER=1` (all are off by default); the reference database path is set by `WR_DB`.
+
+<a name="en-api"></a>
+## 🔌 API
+
+- The server exposes **96 API routes** plus WebSocket `/ws`.
+- Specification: `rust-server/src/openapi_spec.json` — describes **19 key routes** (not all 96).
+- Core endpoints: `GET /api/config`, `/api/wallets` (+`POST`/`DELETE`), `/api/events?limit=N`, `/api/whale-assets`, `/api/capital-groups`, `/api/cross-asset`, `/api/asset-forensics`, `/api/meta-subnets`, WS `ws://…/ws`.
+- Sign-in: the `/login.html` form (session cookie for 12 hours) or HTTP Basic. Passwords: `ADMIN_PASSWORD` (admin) / `APP_PASSWORD` (read-only viewer). With no passwords set, local mode lets everyone in.
+
+<a name="en-structure"></a>
+## 🗂 Structure
 
 ```
-🩺 Стан бота
-• команди: працюють · 12 хв тому
-• остання вдала спроба: щойно
-• джерело: доступне
-• зріз: 1 хв тому
-• черга: 0 у черзі · помилок: 0 · ретраїв: 0 · пропущено: 0 · скинуто: 0 · повернуто: 0
-• підписників: 3
+rust-server/       PRODUCTION. axum backend, 85 modules + bin/parity_check
+  src/openapi_spec.json    API specification (19 key routes)
+wr-store/          SQLite reference data + migrations + wr-import tool
+wr-dict/           Shared dictionaries on top of wr-store
+backfill/          Rust: backfill into Elasticsearch + binaries (relay-monitor, supply, eth-*, btc-*)
+nextaction/        Rust: analytics binaries (strategy, volatility, capgroups, rg*, train, cohort…)
+features/          Rust: feature extraction, family clustering, model
+patterns/          Rust: pattern engine for finding coordinated capital groups (+ orderbook, tradetape)
+satellite/         Rust: key-holding proxy (gRPC/mTLS)
+gat/               Rust: Graph Attention Network (offline ML)
+proto/             satellite.proto — core ↔ satellite contract
+web/               Frontend: src/*.ts → app.js (esbuild) + app.css (tailwind); index.html, network.html
+deploy/            Cron scripts (shell) + group-monitor.py + PKI + satellites compose
+docs/              satellites.md, brandbook.html
+scripts/, tools/   Build helpers (Node): fixture generators, stamp-assets
+
+Not in the public repository:
+dataset/           Live datasets/models (JSON/CSV)
+server/            LEGACY Node — not run; oracle for parity_check
+test/              node --test (*.test.ts)
+old/               Archive of removed dev artefacts
+.env               Core secrets (600, never committed)
 ```
 
-Показує: стан поллера (і скільки часу в ньому), останню вдалу спробу, доступність
-Wallet Radar і свіжість зрізу, чергу на відсилання та підписників. Якщо джерело
-недоступне — бот каже про це прямо («джерело: НЕДОСТУПНЕ», «секції порожні —
-алерти не формуються»), а не показує нулі як робочі числа.
+<a name="en-tests"></a>
+## 🧪 Testing
 
-**Ізоляція:** відповідь йде тільки в чат, з якого прийшло повідомлення;
-бот **не працює в групах і каналах** — у групі приватна відповідь стала б
-публічною, а сам факт присутності бота розкрив би, хто підписаний на альерти.
+```bash
+npm test                                    # node --test: golden parity of parsers
+cd rust-server && cargo test                # Rust unit tests
+# Node↔Rust parity: Node on 3000, Rust on 3001
+cargo run --release --bin parity_check
+```
+
+Golden fixtures are generated by `tools/gen_*_fixtures.mjs`; they pin the reference output of the
+parsers that both implementations are checked against.
+
+> [!NOTE]
+> The golden fixtures and `test/` are not in the public repository, so `npm test` and
+> `cargo test` in `rust-server` do not run without them. `cargo test` in `wr-store` works.
+
+<a name="en-license"></a>
+## 📄 License
+
+Proprietary. © 2026 Vitalii Vedana. All rights reserved. See [`LICENSE`](LICENSE).
+
+<div align="right"><a href="#en">↑ Top</a> · <a href="#ua">Українська ↓</a></div>
 
 ---
-
-## Архітектура
-
-```
-crates/privacy-filter   санітизація вихідного тексту
-crates/storage          трейт Store + SQLite (WAL) і Postgres (sqlx), схема, GDPR-видалення
-crates/wr-client        REST + WS до Wallet Radar, типи без адрес
-crates/alert-engine     події + зрізи → алерти (вікна, пороги, alert_key)
-crates/broadcast        durable-черга, ідемпотентність, ретраї, ліміти
-crates/user-session     ізольований стан користувача
-crates/telegram-gateway поллінг (teloxide), роутинг команд
-crates/admin            адмін-команди, аудит
-bot/                    бінарник: конфіг, оркестрація, цикли, shutdown
-```
-
-Повний опис — [docs/DESIGN.md](docs/DESIGN.md) (A–F) і
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (розгорнутий).
-
 ---
 
-## Запуск
+<a name="ua"></a>
+
+<div align="center">
+
+# 📡 Wallet Radar
+
+<a href="#en"><img src="https://img.shields.io/badge/English-E6EAF0?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2MCAzMCI%2BPGNsaXBQYXRoIGlkPSJ0Ij48cGF0aCBkPSJNMzAsMTVoMzB2MTV6djE1aC0zMHpoLTMwdi0xNXp2LTE1aDMweiIvPjwvY2xpcFBhdGg%2BPHBhdGggZD0iTTAsMHYzMGg2MHYtMzB6IiBmaWxsPSIjMDEyMTY5Ii8%2BPHBhdGggZD0iTTAsMEw2MCwzME02MCwwTDAsMzAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSI2Ii8%2BPHBhdGggZD0iTTAsMEw2MCwzME02MCwwTDAsMzAiIGNsaXAtcGF0aD0idXJsKCN0KSIgc3Ryb2tlPSIjQzgxMDJFIiBzdHJva2Utd2lkdGg9IjQiLz48cGF0aCBkPSJNMzAsMHYzME0wLDE1aDYwIiBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iMTAiLz48cGF0aCBkPSJNMzAsMHYzME0wLDE1aDYwIiBzdHJva2U9IiNDODEwMkUiIHN0cm9rZS13aWR0aD0iNiIvPjwvc3ZnPg%3D%3D" alt="English" height="28"></a>&nbsp;<a href="#ua"><img src="https://img.shields.io/badge/%D0%A3%D0%BA%D1%80%D0%B0%D1%97%D0%BD%D1%81%D1%8C%D0%BA%D0%B0-4C8DFF?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMCAyMCI%2BPHJlY3Qgd2lkdGg9IjMwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjMDA1N0I3Ii8%2BPHJlY3QgeT0iMTAiIHdpZHRoPSIzMCIgaGVpZ2h0PSIxMCIgZmlsbD0iI0ZGRDcwMCIvPjwvc3ZnPg%3D%3D" alt="Українська" height="28"></a>
+
+### Що робить розумний капітал — на одному екрані.
+
+Мультичейн-термінал ончейн-розвідки для роздрібного трейдера: накопичення китів,
+координовані групи капіталу, фази пампу й ліквідації — на одному екрані.
+
+</div>
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="140"><a href="#ua-about">📦<br><b>Про репозиторій</b></a></td>
+    <td align="center" width="140"><a href="#ua-what">🎯<br><b>Що це робить</b></a></td>
+    <td align="center" width="140"><a href="#ua-arch">🏗<br><b>Архітектура</b></a></td>
+    <td align="center" width="140"><a href="#ua-langs">🧬<br><b>Мовний склад</b></a></td>
+    <td align="center" width="140"><a href="#ua-migration">🦀<br><b>Міграція на Rust</b></a></td>
+    <td align="center" width="140"><a href="#ua-run">🚀<br><b>Запуск</b></a></td>
+  </tr>
+  <tr>
+    <td align="center" width="140"><a href="#ua-config">⚙️<br><b>Конфігурація</b></a></td>
+    <td align="center" width="140"><a href="#ua-api">🔌<br><b>API</b></a></td>
+    <td align="center" width="140"><a href="#ua-structure">🗂<br><b>Структура</b></a></td>
+    <td align="center" width="140"><a href="#ua-tests">🧪<br><b>Тестування</b></a></td>
+    <td align="center" width="140"><a href="#ua-license">📄<br><b>Ліцензія</b></a></td>
+    <td align="center" width="140"><a href="#en">🌐<br><b>English</b></a></td>
+  </tr>
+</table>
+
+</div>
+
+<a name="ua-about"></a>
+## 📦 Про цей репозиторій
+
+Тут лежить **рушій без даних**: код аналізу, але не результати. Свідомо **не** включено:
+
+- `dataset/` — зібрані дані досліджень (десятки тисяч адрес);
+- `server/` — легасі Node-бекенд, який витісняється (джерело правди — Rust);
+- golden-фікстури тестів (`rust-server/tests/fixtures/`) — це знімки реальних даних;
+- внутрішні звіти, нотатки сесій і runbook інфраструктури.
+
+Довідники (адреси бірж, пороги, групи, параметри стратегій) живуть у **SQLite** (крейт
+`wr-store`), а не в коді — див. `wr-store/migrations/`. Без бази застосунок **не стартує й
+пояснює, що робити**, а не працює на нулях; база без потрібних тегів стартує, але пише в лог,
+чого саме бракує. Наповнити: `wr-import load` із seed-файлів авторів (`wr-import extract`
+потребує повної історії репозиторію, якої в публічній версії немає).
+
+> [!NOTE]
+> У публічній версії також бракує `rust-server/src/groupgraph.rs` і частини бінів `nextaction`
+> (29 із 73, перелічених у `Cargo.toml`), тому без них ці крейти не збираються.
+
+<a name="ua-bot"></a>
+## 📨 Telegram-бот алертів (окремий сервіс)
+
+Telegram-бот — це окремий продукт `wallet-radar-alerts-bot`, який говорить з
+Wallet Radar так само, як будь-який зовнішній сервіс: **лише на читання, через
+REST + WebSocket** (`/api/signals`, `/api/events`, `/api/meta-subnets`).
+Бот нічого тут не змінює. Його код живе в цьому дереві (`crates/*`, `bot/`),
+а його власна документація — [`README-alerts-bot.md`](README-alerts-bot.md).
+
+- **Де код:**
+  - у цьому репозиторії (злито через PR #13 з гілки
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
+    — публічна копія;
+  - у приватному репозиторії `vitalii/wallet-radar-alerts-bot` нашого Forgejo
+    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — робоча
+    копія.
+- **Чому окремо:** старий полер у дереві (`botd`) прибрано в `e2e777a` — два
+  боти з одним токеном Telegram і були джерелом конфліктів полерів (409). Новий
+  бот працює як окремий юніт systemd, зі своїм токеном і своїм станом.
+- **Рантайм:** Rust-воркспейс (`crates/*`, `bot/`); сховище — **Postgres** через
+  `sqlx` (чергу доставок забирається з `FOR UPDATE SKIP LOCKED`), SQLite лишається
+  як fallback. Розгортання — `/opt/wallet-radar-alerts-bot`, юніт
+  `wallet-radar-alerts-bot.service`, секрети у власному `.env`
+  (`TELEGRAM_BOT_TOKEN`, `POSTGRES_URL`, …).
+- **Приватність за конструкцією:** ані у вихідних повідомленнях, ані в базі
+  немає реальних адрес чи хешів транзакцій — адреса `root` із `/api/signals`
+  хешується на боці клієнта в `opaque_id`.
+- **Команди:** `/assets`, `/groups`, `/signal <SYMBOL>`, `/digest daily|weekly`,
+  `/settings`, `/mute`, `/unmute`, `/language uk|en`; адмінські: `/broadcast`,
+  `/stats`, `/users`, `/block`, `/unblock`, `/health`. Асистент (`/api/ask`)
+  **вимкнено за замовчуванням**, бо LLM може процитувати сирі дані джерела.
+
+<a name="ua-what"></a>
+## 🎯 Що це робить
+
+Відстежує гаманці в багатьох мережах:
+
+- **баланси й портфель** із графіком, **жива стрічка подій**;
+- **граф зв'язків** («павутина»), **Tracer** (трасування потоків), **Alerts** (правила сповіщень);
+- **Entity-профілі**, настроюваний **Dashboard**;
+- **пошук** по активах і адресах усіх мереж;
+- інтерфейс **5 мовами**.
+
+Ключова риса — **детекція «десків» і капітал-груп**: пошук координованих китів, злиття
+під-мереж, класифікація архетипів, помісячна активність, розвідсторінка з живим force-графом
+(`/network.html`).
+На головному екрані блок **«Групи капіталу»** показує частку контрольованої емісії й склад
+кожної групи (ядро / холдери), а вкладки перевіряють ончейн-шлях між учасниками та їхню
+координацію (спільні фандери).
+
+<a name="ua-arch"></a>
+## 🏗 Архітектура
+
+**Прод — це Rust.** Бекенд, бекфіл і всі фонові аналітичні задачі виконує Rust. Легасі
+Node-сервер лишається в робочому дереві авторів **лише як еталон парності** для `parity_check`,
+у проді не запускається й до публічного репозиторію не входить. Деталі — у розділі
+[Мовний склад](#ua-langs).
+
+```mermaid
+flowchart LR
+    B["🌐 Браузер<br/>web/ · TypeScript"] -- "HTTP + WebSocket :3000" --> CORE
+
+    subgraph CORE ["rust-server · axum + tokio · systemd"]
+        API["96 API-маршрутів · WS-стрічка<br/>18 фонових воркерів"]
+        DB[("wr-store<br/>довідники в SQLite")]
+        API --- DB
+    end
+
+    CORE -- "публічні, без ключів" --> PUB["Blockscout ×24 EVM · Solana RPC<br/>TronGrid · mempool.space<br/>CoinGecko · DefiLlama · Bybit WS"]
+    CORE -- "gRPC + mTLS (tonic)" --> SAT["🛰 satellite × N<br/>тримають API-ключі"]
+    SAT --> KEYED["Etherscan · Moralis · Arkham<br/>Glassnode · LunarCrush"]
+    CORE --> TG["📨 Telegram-алерти"]
+```
+
+**Модель безпеки (свідома): кор не тримає ключів.** Кожен виклик платного/keyed API йде по
+gRPC поверх mTLS до сателіта, який підставляє ключ уже зі свого оточення. `Fetch` у
+`proto/satellite.proto` навмисно загальний — сателіт повертає тіло провайдера **байт-у-байт**,
+тож golden-перевірені парсери кора лишаються недоторканими. Провайдер лише з allowlist —
+довільний хост передати неможливо (захист від SSRF).
+
+<a name="ua-langs"></a>
+## 🧬 Мовний склад
+
+Що на чому написано і що з цього **реально виконується в проді**:
+
+| Компонент | Мова | Прод? | Роль |
+|---|---|---|---|
+| `rust-server/` | **Rust** | ✅ так | Бекенд :3000 — 96 API-маршрутів, WS, 18 фонових воркерів. Головний процес. |
+| `backfill/` | **Rust** | ✅ так | Бекфіл в Elasticsearch (`backfill2`) + біни `relay-monitor`, `supply`, `eth-*`, `btc-*`, `distrib-alert`… |
+| `nextaction/` | **Rust** | ✅ так | Біни аналітики (73 у `Cargo.toml`): `strategy`, `volatility`, `sector`, `rotation`, `pnl`, `cohort`, `capgroups`, `rg*`, `train`, `merge-graph`… |
+| `features/` | **Rust** | ✅ так | Витяг ознак, кластеризація родин, `model`. |
+| `satellite/` | **Rust** | ✅ так | Key-holding проксі (gRPC/mTLS). |
+| `gat/` | **Rust** | ⏸ офлайн | Graph Attention Network (ML), окремий Dockerfile. |
+| `web/` (`src/*.ts`) | **TypeScript** | ✅ так | Фронтенд. Компілюється в браузерний `app.js` (esbuild) — **на Rust бути не може за визначенням**. |
+| `deploy/*.sh`, `diskguard.sh` | **Shell** | ✅ так | Клей крону: планують і запускають Rust-біни. |
+| `deploy/group-monitor.py` | **Python** | ⚠️ **так** | **Єдиний функціональний не-Rust у проді.** Щоденний Telegram-дайджест по 2 групах. Кандидат на порт (див. нижче). |
+| `server/*.js`, `*.mjs` | **Node** | ❌ **ні** | Легасі-реалізація, **не запускається**. Еталон для `parity_check`. До публічного репозиторію не входить. |
+| `scripts/`, `tools/gen_*` | **Node** | 🔧 build | Допоміжні: `stamp-assets.mjs`, генератори golden-фікстур. |
+| `test/*.test.ts` | **TypeScript** | 🧪 CI | Тести через `node --test`. До публічного репозиторію не входять. |
+
+<a name="ua-migration"></a>
+## 🦀 Статус міграції на Rust
+
+Порт із Node на Rust **фактично завершено**:
+
+- **Rust віддає 96 API-маршрутів — надмножина 70 маршрутів легасі-Node.** Функціонал не втрачено, у Rust його більше.
+- **`parity_check`** (бін у `rust-server/src/bin/`) звіряє ключові маршрути **байт-у-байт** між Node і Rust. Це запобіжник: поки він зелений, Rust гарантовано не розійшовся з перевіреною поведінкою попередніх ітерацій. Тому `server/` тримають живим — як референс.
+- Навіть Python-версію парність-чекера вже портовано в Rust (`tools/parity_check.py` прибрано).
+
+**Що ще НЕ на Rust і чому:**
+
+1. **`deploy/group-monitor.py`** — єдиний не-Rust runtime. Робить інкрементальний краул ETH ERC-20 по ядрах 2 груп і шле Telegram-дельту. Порт реальний: у Rust уже є перекривні біни (`netflow`, `emission`, `distrib-alert`) і `telegram.rs`. ⚠️ Додатковий мотив: скрипт читає `.env` **напряму** — тобто обходить модель «кор без ключів». Порт у Rust-бін, що ходить через сателіт, закрив би і це.
+2. **Фронтенд (`web/src`)** — браузерний код, на Rust не переноситься (хіба WASM, що недоцільно).
+3. **Shell-клей** — доречний як планувальник; переписувати в Rust сенсу мало.
+4. **Node `server/` + `.mjs`** — навмисно лишаються як еталон парності. Видалення = втрата запобіжника проти регресій, тому НЕ чіпаємо.
+
+<a name="ua-run"></a>
+## 🚀 Запуск
+
+### Прод (як воно працює на сервері)
+
+Бекенд — systemd, не Docker і не `npm start`:
 
 ```bash
-# 1. Збірка
-cargo build --release --bin bot
+# зібрати реліз
+cd rust-server && cargo build --release
 
-# 2. Конфіг
-cp config.example.toml config.toml
-$EDITOR config.toml
+# керування сервісом (юніт: deploy/wallet-radar-rust.service)
+systemctl status  wallet-radar-rust.service      # головний бекенд :3000
+systemctl restart wallet-radar-rust.service
+journalctl -u wallet-radar-rust.service -f       # логи
 
-# 3. Секрети — тільки в оточення
-export TELEGRAM_BOT_TOKEN='123456:AA...'
-export WR_PASSWORD='пароль-читача-wallet-radar'
-
-# 4. Старт
-./target/release/bot config.toml
+# фонові Rust-задачі — по systemd-таймерах і crontab (deploy/*.sh)
+systemctl list-timers 'wallet-*'
+crontab -l
 ```
 
-### Як отримати пароль читача Wallet Radar
+### Фронтенд
 
-Те саме, що для веб-доступу до панелі: `ADMIN_PASSWORD` або `APP_PASSWORD` із
-`.env` Wallet Radar. Бот читає тільки GET-маршрути.
-
-### Як перевірити без справжнього токена
+Джерело — `web/src/*.ts` + `web/tw-input.css`. Перед подачею зібрати:
 
 ```bash
-# мок Telegram API
-./target/release/mock-telegram 127.0.0.1:8099 /tmp/messages.log &
-
-# у config.toml:
-#   [telegram]
-#   api_url = "http://127.0.0.1:8099"
-#   [wr]
-#   registry_sync_enabled = false   # тест не має права перезаписувати серверний реєстр
-
-TELEGRAM_BOT_TOKEN=dummy WR_PASSWORD=... ./target/release/bot config.toml
+npm install
+npm run build     # typecheck (tsc) + esbuild (web/src/main.ts → web/app.js) + tailwind + stamp-assets
 ```
 
-`MOCK_UPDATES=/tmp/updates.json` підкладає моку готові оновлення — так
-перевіряється весь шлях «отримали команду → відповіли», а не лише опитування.
+Rust-сервер віддає статику `web/` та API з одного порту `:3000`.
 
-### Синхронізація реєстру підключених
-
-Сервер Wallet Radar розсилає **свої власні** алерти за списком у
-`dataset/telegram-users.json`. Щоб серверні й ботові алерти йшли одним
-подібником, бот записує свій реєстр на сервер (`POST /api/telegram-users`,
-вузький токен `X-Telegram-Sync-Token`).
-
-* Це **запис одного локального файлу на сервері**, а не читання даних: усі
-  *дані* бот бере через read-only API.
-* Сервер **замінює файл цілком**, тому бот надсилає повний список, а не дельту.
-* **Порожній реєстр ніколи не надсилається** — інакше тестовий інстанс або
-  міграція стерли б список реальних підписників (захист у `registry.rs` +
-  тест `bot/tests/registry_sync.rs`).
-* Для тестових і локальних прогонів — `registry_sync_enabled = false`.
-
-### Розсилка оголошення всім підписникам
-
-Одноразовий інструмент `send-notice` ставить ручний алерт у чергу доставок —
-те саме, що команда `/broadcast`, але без залежності від сесії адміністратора
-в Telegram. Повідомлення проходить фільтр приватності, потрапляє в аудит, а
-**надсилає воркер запущеного сервісу** — отже, ліміти, ретраї та
-ідемпотентність працюють ті самі.
+### Локальний Docker (весь стек)
 
 ```bash
-# текст — у файлі
-cat > /tmp/notice.txt <<'EOF'
-📌 Уточнення до попередньої серії повідомлень
-...
-EOF
-
-# сховище: URL бази Postgres (як на проді) або шлях до bot.db
-sudo -u ubuntu /opt/wallet-radar-alerts-bot/bin/send-notice \
-    "$POSTGRES_URL" \
-    <admin_chat_id> <admin_username> /tmp/notice.txt
-# → поставлено в чергу доставок: 3
+cp deploy/.env.example deploy/.env   # ключі API сателітів (порожні — не помилка: configured=false)
+docker compose up --build            # http://localhost:3000
 ```
 
-### systemd
+Єдиний ручний крок — `deploy/.env` (без нього compose не стартує, а `*.env` у `.gitignore`).
+
+Піднімаються `pki-init` (разово видає mTLS-сертифікати в `deploy/pki/out`), `store-init` (разово
+створює базу довідників), обидва сателіти й Rust-кор із зібраним фронтендом. Кор працює в суворому
+режимі сателітів, як на проді. За замовчуванням увімкнені лише чотири воркери без ключів із
+`.env.example`; прод крутить усі 20 (разом із бекапом на ~204 ГБ), тож решту вмикайте в `.env`
+свідомо. Необов'язкові секрети кора (Telegram, Sentry, паролі) — у кореневому `.env`.
+
+**База.** Сховище довідників — вбудований файл SQLite (`wr-store`, `WR_DB`), а не сервер БД:
+Postgres/MS SQL код не підтримує. `store-init` створює його в томі `store`, беручи перше доступне
+джерело з `./seed/`:
+1. `wallet-radar.db` — готова база від авторів, копіюється як є;
+2. `constants.json`, `real-money.json`, `universe.json`, … — seed-файли авторів, `wr-import load`;
+3. нічого — **порожня база з міграціями** (`wr-import init`). UI стартує, але без гаманців, груп,
+   порогів і тегів, а джерела з ключами лишаються порожніми. Кор пише в лог, яких тегів бракує.
+
+У публічному репозиторії немає ні (1), ні (2), тож зі свіжого клону вийде (3). Щоб перейти на
+справжні дані, покладіть файли в `./seed/` і виконайте `docker compose down -v && docker compose up`:
+наявну базу ніколи не перезаписують, тому `-v` обов'язковий. `rust-server/src/groupgraph.rs` у
+публічній версії — заглушка: `/api/group-graph` відповідає `501`.
+
+<a name="ua-config"></a>
+## ⚙️ Конфігурація та секрети
+
+- **`.env`** (права `600`, у `.gitignore`) — лише власні секрети кора: паролі, `TELEGRAM_BOT_TOKEN`, `SENTRY_DSN`, `ADMIN_PASSWORD` / `APP_PASSWORD`.
+- **Ключів до Etherscan / Moralis / Arkham / Glassnode / LunarCrush у `.env` кора НЕМАЄ** — їх тримають сателіти (`deploy/docker-compose.satellites.yml` + `deploy/.env`, див. [`docs/satellites.md`](docs/satellites.md)).
+- **mTLS-PKI** сателітів — `deploy/pki/out/` (у `.gitignore`).
+- Фонові воркери вмикаються поодинці через `ENABLE_*_WORKER=1` (за замовчуванням усі вимкнені); шлях до бази довідників задає `WR_DB`.
+
+<a name="ua-api"></a>
+## 🔌 API
+
+- Сервер віддає **96 API-маршрутів** плюс WebSocket `/ws`.
+- Специфікація: `rust-server/src/openapi_spec.json` — описує **19 ключових маршрутів** (не всі 96).
+- Базові: `GET /api/config`, `/api/wallets` (+`POST`/`DELETE`), `/api/events?limit=N`, `/api/whale-assets`, `/api/capital-groups`, `/api/cross-asset`, `/api/asset-forensics`, `/api/meta-subnets`, WS `ws://…/ws`.
+- Вхід: форма `/login.html` (сесійна cookie на 12 годин) або HTTP Basic. Паролі: `ADMIN_PASSWORD` (адмін) / `APP_PASSWORD` (глядач, лише читання). Без паролів — локальний режим, пускає всіх.
+
+<a name="ua-structure"></a>
+## 🗂 Структура
+
+```
+rust-server/       ПРОД. axum-бекенд, 85 модулів + bin/parity_check
+  src/openapi_spec.json    специфікація API (19 ключових маршрутів)
+wr-store/          Довідники в SQLite + міграції + утиліта wr-import
+wr-dict/           Спільні словники поверх wr-store
+backfill/          Rust: бекфіл в Elasticsearch + біни (relay-monitor, supply, eth-*, btc-*)
+nextaction/        Rust: біни аналітики (strategy, volatility, capgroups, rg*, train, cohort…)
+features/          Rust: витяг ознак, кластеризація родин, model
+patterns/          Rust: рушій патернів пошуку координованих груп капіталу (+ orderbook, tradetape)
+satellite/         Rust: key-holding проксі (gRPC/mTLS)
+gat/               Rust: Graph Attention Network (офлайн-ML)
+proto/             satellite.proto — контракт кор↔сателіт
+web/               Фронтенд: src/*.ts → app.js (esbuild) + app.css (tailwind); index.html, network.html
+deploy/            Крон-скрипти (shell) + group-monitor.py + PKI + satellites-compose
+docs/              satellites.md, brandbook.html
+scripts/, tools/   Build-хелпери (Node): генератори фікстур, stamp-assets
+
+Не входить у публічний репозиторій:
+dataset/           Живі датасети/моделі (JSON/CSV)
+server/            ЛЕГАСІ Node — НЕ запускається; еталон для parity_check
+test/              node --test (*.test.ts)
+old/               Архів прибраних dev-артефактів
+.env               Секрети кора (600, не комітиться)
+```
+
+<a name="ua-tests"></a>
+## 🧪 Тестування
 
 ```bash
-sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now wallet-radar-alerts-bot
-journalctl -u wallet-radar-alerts-bot -f
+npm test                                    # node --test: golden-парність парсерів
+cd rust-server && cargo test                # Rust-юніти
+# парність Node↔Rust: Node на 3000, Rust на 3001
+cargo run --release --bin parity_check
 ```
 
-**Якщо прод на ноутбуку** — кришка не має вводити систему в сон, інакше бот
-зупинить опитування (11 листопада 2026 — 23 години без жодного опитування):
+Golden-фікстури генерують `tools/gen_*_fixtures.mjs`; вони фіксують еталонний вихід парсерів,
+проти якого звіряються обидві реалізації.
 
-```bash
-sudo mkdir -p /etc/systemd/logind.conf.d
-sudo cp deploy/logind/99-lid-ignore.conf /etc/systemd/logind.conf.d/
-sudo systemctl reload systemd-logind
-```
+> [!NOTE]
+> Golden-фікстур і `test/` у публічному репозиторії немає, тож `npm test` і `cargo test` у
+> `rust-server` без них не запускаються. `cargo test` у `wr-store` працює.
 
-Юнит працює як `Restart=on-failure`: бот, який завершився через **409** (на
-токені вже працює інший полер), виходить із кодом 0 і **не піднімається
-знову** — інакше виникає цикл старт/409/старт. Падіння (ненульовий код)
-перезапускається, але не більше 5 разів за 5 хвилин.
+<a name="ua-license"></a>
+## 📄 Ліцензія
 
----
+Пропрієтарна. © 2026 Vitalii Vedana. Усі права захищено. Див. [`LICENSE`](LICENSE).
 
-## Розгортання на ВМ
-
-```
-/opt/wallet-radar-alerts-bot/
-├── bin/            bot, mock-telegram, send-notice, migrate-sqlite-to-postgres
-├── config.toml     без секретів — лише імена змінних оточення
-├── data/bot.db     SQLite (WAL) — резервна копія після переходу на Postgres
-├── secrets/        0600: пароль Postgres (джерело POSTGRES_PASSWORD_FILE)
-├── docs/           DESIGN.md, ARCHITECTURE.md
-└── .env            0600: TELEGRAM_BOT_TOKEN, WR_PASSWORD,
-                    TELEGRAM_SYNC_TOKEN, BOT_REF_SECRET, POSTGRES_URL
-```
-
-Перемикання полера зі старого `botd` на новий бот:
-
-```bash
-# 1. старий бот — зупинити, вимкнути й вилучити (його код уже прибрано)
-sudo systemctl disable --now wallet-radar-bot.service
-sudo rm -f /etc/systemd/system/wallet-radar-bot.service
-
-# 2. новий сервіс
-sudo cp deploy/wallet-radar-alerts-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now wallet-radar-alerts-bot
-```
-
-**Правило Wallet Radar: один полер на токен.** Два поллери на тому самому
-токені → `409 Conflict`. Що робити з цим — визначає
-`[bot] poll_conflict_policy`:
-
-* `keep_running` (типово) — зупиняється **лише опитування команд**; збір
-  даних, згортання й доставка алертів продовжуються, а опитування
-  повторюється щоминуты — тож воно оживе саме, коли конфлікт зникне;
-* `exit` — процес завершується: нічого не дублюємо, але й нічого не
-  надсилаємо.
-
-Перевірка, що полер один:
-
-```bash
-ps aux | grep -E 'botd|alerts-bot' | grep -v grep
-```
-
-> **Увага: перевірка «одного полера» має бути довгою.** Telegram віддає `409`
-> лише коли довге опитування **перетинається** з чужим. Короткий запит
-> (`timeout=5`) може впасти у «вікно» між опитуваннями конкурента й пройти
-> без помилки — тож одиночний `getUpdates` нічого не доводить. Перевіряти
-> треба **довгим** опитуванням (`timeout=25`), кілька разів: якщо хоч раз
-> прийшов `409` — полер на токені є, і він не на цій ВМ (перевірити: жоден
-> процес не має токен у своєму оточенні).
-
-Зупинка бота не залишає «мертвих» з'єднань: довге опитування переривається
-за сигналом зупинки, а не чекає до 25 секунд. Інакше systemd вбив би процес
-(`TimeoutStopSec`), а наступний інстанс отримав би `409` від того, що не
-встиг відпустити з'єднання.
-
----
-
-## Сховище: Postgres
-
-Бекенд обирається конфігом, а код один і той самий для обох:
-
-```toml
-[storage]
-backend = "postgres"             # sqlite | postgres
-sqlite_path = "/opt/wallet-radar-alerts-bot/data/bot.db"
-postgres_url_env = "POSTGRES_URL"
-postgres_max_connections = 5
-postgres_connect_timeout_secs = 10
-```
-
-URL бази лежить у `.env` (`POSTGRES_URL`), а не в `config.toml` — у конфіг
-потрапляють лише імена змінних оточення.
-
-**База (локально, Docker):**
-
-```bash
-docker run -d --name wr-postgres --restart unless-stopped \
-  -p 127.0.0.1:5433:5432 \
-  -e POSTGRES_USER=wr -e POSTGRES_DB=wallet_radar \
-  -e POSTGRES_PASSWORD_FILE=/run/secrets/pg_password \
-  -v /opt/wallet-radar-alerts-bot/secrets/pg_password:/run/secrets/pg_password:ro \
-  -v wr-postgres-data:/var/lib/postgresql/data \
-  postgres:16-alpine
-```
-
-Пароль зберігається у файлі `secrets/pg_password` (0600, root) і підставляється
-в контейнер через `POSTGRES_PASSWORD_FILE` — тобто пароль не світиться в
-`docker inspect`.
-
-**Перенесення стану з SQLite:**
-
-```bash
-sudo systemctl stop wallet-radar-alerts-bot.service
-cp -a /opt/wallet-radar-alerts-bot/data/bot.db /opt/wallet-radar-alerts-bot/data/bot.db.bak-$(date +%Y%m%d-%H%M%S)
-
-./target/release/migrate-sqlite-to-postgres \
-    --sqlite /opt/wallet-radar-alerts-bot/data/bot.db \
-    --postgres-url "postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_password)@127.0.0.1:5433/wallet_radar"
-```
-
-Мігратор переносить усі таблиці **в одній транзакції** і використовує
-`ON CONFLICT DO NOTHING`, тож повторний запуск безпечний. Перенесені дані:
-3 користувачі, 15 підписок, 13 775 алертів, 996 доставок, 58 806 подій,
-999 снапшотів, курсори (`kv`).
-
-**Перемикання і відкат:**
-
-```bash
-# увімкнути Postgres
-sed -i 's/^backend = .*/backend = "postgres"/' /opt/wallet-radar-alerts-bot/config.toml
-sudo systemctl start wallet-radar-alerts-bot.service
-
-# відкат на SQLite (файл лишається резервною копією)
-sed -i 's/^backend = .*/backend = "sqlite"/' /opt/wallet-radar-alerts-bot/config.toml
-sudo systemctl restart wallet-radar-alerts-bot.service
-```
-
-**Тести проти живої бази:**
-
-```bash
-POSTGRES_TEST_URL="postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_password)@127.0.0.1:5433/wallet_radar_test" \
-    cargo test -p storage --test postgres_store
-```
-
-Без `POSTGRES_TEST_URL` ці тести пропускаються (а не падають). Кожен тест
-працює в окремій схемі (`test_<uuid>`), тож не заважає один одному і не
-чіпає робочу базу.
-
----
-
-## Код у Forgejo
-
-Репозиторій: `vitalii/wallet-radar-alerts-bot` (приватний, Forgejo на цій самій
-машині, SSH на порту `2222`).
-
-### Як комітити (один крок замість шести)
-
-```bash
-cd /root/src/wallet-radar-alerts-bot
-./tools/push-all.sh "повідомлення коміту"
-```
-
-Скрипт сам: перевірить гілку й чистоту дерева, покаже, що зміниться,
-закомітить, запушить у **Forgejo** (`origin master` — приватна основна копія)
-і в **GitHub** (`github master:feat/telegram-alerts-bot` — публічна копія), а
-потім звірить, що локальний коміт, Forgejo і GitHub — одна й та сама SHA.
-
-Якщо руками — той самий порядок, нічого не пропускайте:
-
-```bash
-cd /root/src/wallet-radar-alerts-bot
-git switch master                       # пуш можливий лише з master
-git status --short                      # що змінено
-git diff --stat                         # наскільки змінилось
-git add -A && git commit -m "текст"     # коміт
-git push origin master                  # Forgejo (приватний, основний)
-GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
-  git push github master:feat/telegram-alerts-bot   # GitHub (публічний)
-```
-
-Звірка (усі три мають збігатися):
-
-```bash
-git rev-parse master
-git ls-remote origin refs/heads/master
-GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
-  git ls-remote github refs/heads/feat/telegram-alerts-bot
-```
-
-**Якщо push відхилено:**
-* `Updates were rejected` (non-fast-forward) — хтось дописав у гілку на
-  GitHub: `git pull --rebase github feat/telegram-alerts-bot`, розв'язати
-  конфлікти, повторити push;
-* `protected branch` — у GitHub: Settings → Branches → Branch protection rules
-  → зняти захист (зараз захисту немає на жодній гілці);
-* `Permission denied (publickey)` — для Forgejo потрібен ключ за замовчуванням
-  (`/root/.ssh/id_ed25519`), для GitHub — `/root/.ssh/github_key`; не плутайте
-  їх: у скрипті Forgejo перевіряється **без** `GIT_SSH_COMMAND` від GitHub.
-
-
-
-```bash
-git remote -v
-# origin  ssh://git@192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git
-```
-
-> **Адреса Forgejo — тепер зарезервована в DHCP.** `SSH_DOMAIN` у
-> `/etc/forgejo/app.ini` вказує IP ноутбука, а IP видається по DHCP і вже
-> змінювався (`.112` → `.104`). Тому адресу `192.168.2.104` прив'язано до
-> MAC ноутбука в DHCP-роутері (Tenda, `192.168.2.1` → Advanced → Static IP
-> List), тож після будь-якого перезавантаження він знову отримає ту саму
-> адресу, а clone-URL у Forgejo лишатиметься правильним.
->
-> Резервація відтворювана скриптом:
->
-> ```bash
-> ./tools/reserve-ip-on-router.sh
-> ```
->
-> Якщо все ж доведеться міняти адресу:
->
-> * оновити `SSH_DOMAIN` і перезапустити Forgejo:
->   `sudo systemctl restart forgejo.service`;
-> * на ВМ `192.168.2.222` (Wallet Radar) remote теж треба оновити на нову
->   адресу — готовий скрипт `tools/fix-remote-after-ip-change.sh`.
-
-### Автотест після перезавантаження
-
-Після будь-якого ребуту `wra-postboot-check.service` (oneshot, увімкнений)
-через 45 секунд перевіряє, що машина «на місці» і Forgejo-remote знову живий:
-
-| Перевірка | Що доводить |
-|---|---|
-| `boot_id` vs `/var/lib/wra-preboot-id` | завантаження було **справді нове** |
-| `ip` | DHCP-резервація видала ту саму адресу `192.168.2.104` |
-| `reservation` | запис про резервацію досі в роутері |
-| `forgejo_service` | `forgejo.service` піднявся |
-| `git_ls_remote` | Forgejo віддає гілки по SSH |
-| `git_clone` | репозиторій **реально клонується** (не просто «посилання») |
-| `bot_service` / `source_service` | бот і Wallet Radar живі |
-| `source_api` / `source_events` | джерело віддає дані (з авторизацією) |
-| `conflict_409` | немає конкурента-поллера на токені |
-
-Результат — у `/var/log/wra-postboot-check.log` (повний) та
-`/var/lib/wra-postboot-check.result` (коротко, `key=PASS|FAIL`):
-
-```bash
-tail -30 /var/log/wra-postboot-check.log
-cat /var/lib/wra-postboot-check.result
-# або вручну, у будь-який момент:
-bash tools/postboot-check.sh
-```
-
-Щоб наступний ребут теж мав доказ, оновіть «попередній» boot-id одразу перед
-ним:
-
-```bash
-cat /proc/sys/kernel/random/boot_id | sudo tee /var/lib/wra-preboot-id
-```
-
-Крім локального логу, автотест пушить звіт у гілку `postboot-report`
-приватного репозиторію — її видно у Forgejo-UI навіть без SSH-доступу до
-машини (у `docs/postboot-report.md`).
-
----
-
-## Тести
-
-```bash
-cargo test --workspace
-```
-
-* `privacy-filter` — 11 тестів: адреси, tx-hash, base58, ENS, explorer-URL,
-  zero-width і повноширинні символи (обхід через Unicode), невипадкові спрацювання.
-* `wr-client` — 12 тестів: whitelist-розбір, відсутність адрес у типах,
-  стабільність ідентифікаторів, розбір WS-кадрів, **ознака доступності
-  джерела** (сервер відповів 404 — джерело доступне; сервер не відповів —
-  джерело недоступне).
-* `alert-engine` — 8 тестів: пороги, вікна, стабільність ключа, відсутність
-  адрес у відрендереному тексті, агрегація cross-asset в один алерт на вікно.
-* `storage` + `user-session` — 15 тестів: схема, ідемпотентність, каскади,
-  GDPR-видалення, ізоляція стану між чатами.
-* `bot/tests/golden.rs` — 2 тести: **нуль заборонених токенів у виході**,
-  фільтр ручного адмінського тексту.
-* `bot/tests/registry_sync.rs` — 2 тести: **порожній реєстр не стирає
-  підписників на сервері**, непустий — синхронізується.
-* `bot/tests/digest_command.rs` — 3 тести: `/digest` end-to-end (добірка за
-  період, мова користувача, порожній період).
-* `telegram-gateway/tests/digest.rs` — 8 тестів: підсумки, групування за
-  видом і активом, множина, фільтри, приватність.
-* `storage` / `user-session` — тести вибірки алертів за вікно та фільтрів
-  дайджесту за темами, важливістю й активами.
-* `broadcast/tests/backlog.rs` — 9 тестів: **буферизація черги під час
-  недоступності джерела**, скидання прострочених доставок без надсилання,
-  недоторканність уже надісланих, межа `0` (безстроковий буфер), стійкість
-  до перезапуску, злиття зведень лише після відновлення джерела, **воркер
-  скидає прострочене до відправлення** (регресія, знайдена на живих даних).
-* `bot/tests/poll_state.rs` — 4 тести: **стан опитування Telegram** —
-  переходи фіксуються один раз, опис згадує 409, `/stats` показує стан
-  (і не ламається, коли стан не відстежується).
-
----
-
-## Експлуатаційні знахідки (листопад 2026)
-
-### Розрив у роботі: ноутбук засинає
-
-11 листопада журнал показав **23 години мовчання** (21:28 → 20:49) без жодного
-рятка помилки. Причина — `PM: suspend entry (deep)`: ноутбук заснув і прокинувся
-наступного дня. Бот пережив це без рестарту (`NRestarts=0`), але:
-
-* увесь цей час **не було жодного опитування Telegram** — тобто жодної
-  команди й жодного підтвердження доставки;
-* heartbeat-таймаут (`heartbeat_timeout_secs = 90`) не встиг відреагувати: під
-  час сну процес не виконує таймерів, а перший же «тик» після пробудження
-  вже показує `silent_ms=84091557`.
-
-> **Висновок для експлуатації:** heartbeat ловить «поллер помер», але не
-> ловить «машина спить». Якщо бот має працювати цілодобово, прод має бути на
-> ВМ без автозасинання (або з `systemd-inhibit`), а не на ноутбуку.
->
-> **Спроба `systemd-inhibit` у юніті — не вдалася, не повторювати.** Каталог
-> `/run/systemd/inhibit` доступний лише root, а сервіс працює від `ubuntu`:
-> `systemd-inhibit` завершується з «Failed to inhibit: Access denied», і
-> systemd вбиває бот. Варіант із префіксом `+` (впуск від root) плюс
-> `setpriv` для зниження прав теж не підійшов — сервіс не піднявся.
->
-> Тому зараз лишається **ризик**: закриття кришки ноутбука вбиває опитування
-> до пробудження. Правильне рішення — перенести прод на ВМ без автозасинання
-> або вимкнути автозасинання системно:
->
-> ```bash
-> # HandleLidSwitch=ignore у /etc/systemd/logind.conf + daemon-reload
-> ```
->
-> **Вирішено (11 листопада 2026).** Створено
-> `/etc/systemd/logind.conf.d/99-lid-ignore.conf`:
->
-> ```ini
-> [Login]
-> HandleLidSwitch=ignore            # кришка закрита (акумулятор)
-> HandleLidSwitchExternalPower=ignore # кришка закрита (від мережі)
-> HandleLidSwitchDocked=ignore      # кришка закрита, під док-станцією
-> ```
->
-> Усі три режими — бо одного `HandleLidSwitch=ignore` замало: на акумуляторі
-> кришка все одно вводила б систему в сон. Застосування — `systemctl reload
-> systemd-logind` (сесія не зривається), перевірка — через D-Bus:
->
-> ```bash
-> busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
->   org.freedesktop.login1.Manager HandleLidSwitch
-> ```
->
-> `IdleAction` (сон за лицьовим часом) навмисно **не** змінювався: це інше
-> рішення, і кришка була саме тією причиною, через яку бот зупинявся надовго.
-> Якщо потрібен цілодобовий режим і без простою — це вже про перенесення
-> прод-у на ВМ, а не про налаштування ноутбука.
-
-### Дві копії Wallet Radar
-
-У мережі два незалежні екземпляри Wallet Radar, і вони **не** тотожні:
-
-| | `.104` (наша ВМ) | `.222` |
-|---|---|---|
-| токен Telegram | `fe7f8264` (спільний із ботом) | `ced43208` (**інший**) |
-| Telegram-модуль сервера | вимкнено | **увімкнено** |
-| `/api/signals` | `404` | `200` |
-| реєстр | живий (пише наш бот) | живий лише вручну |
-
-Тому сервер на `.222` — **не** конкурент у сенсі `409`: він має інший токен і
-поллерити не може (`TELEGRAM_CHAT_ID` задано, реєстр не порожній). Конкурентом
-був лише `botd`, який читав `.env` із **спільним** токеном.
-
-`404` на `/api/signals` і `/api/meta-subnets` — це нормальний стан нашого
-сервера: `wr-client` трактує `404` як «сервер відповів, маршруту немає» (джерело
-доступне), а не як збій. Але через це наш бот не бачить сімейних сигналів і
-архетипів — лише агрегати з інших маршрутів.
-
----
-
-## Перевірка на живих даних
-
-```bash
-./tools/live_smoke.sh          # RUN_SECS=25 за замовчуванням
-```
-
-Скрипт піднімає мок Telegram API, запускає бота проти **справжнього** Wallet Radar
-на `:3000`, підписує тестового користувача й перевіряє три речі:
-
-1. **Доставка.** Алерти справді доходять до підписника (лог мока показує тексти).
-2. **Вихід.** З відповідей живого джерела витягується корпус реальних адрес і
-   tx-hash (на прогоні — **16156** унікальних; корпус береться з `/api/events`,
-   `/api/capital-groups`, `/api/signals`, `/api/whale-assets`, `/api/cross-asset`,
-   `/api/asset-forensics`) і перевіряється, що жодна з них не зустрічається в
-   тому, що бот показав.
-3. **Стан.** Те саме перевіряється по таблицях `alert_log`, `snapshots`,
-   `deliveries` — у стані бота теж немає жодної реальної адреси.
-4. **Адмінська команда.** Фаза 4 підкладає в мок оновлення з `/health` від
-   імені адміністратора й перевіряє, що бот відповів оперативним станом.
-
-Результат останнього прогону: **0 збігів** у вихідних повідомленнях і **0** у
-стані БД.
-
-**Перевірка reaper'а на живій базі.** Щоб переконатися, що застряглі
-`sending`-рядки справді повертаються в чергу, у прод-BD вставляється
-синтетичний рядок зі статусом `sending` і простроченою орендою:
-
-```sql
-INSERT INTO deliveries (chat_id, alert_key, priority, status, attempts,
-                        next_attempt_at, created_at, text)
-VALUES (999999999, 'reaper-probe', 2, 'sending', 0, <now-1000>, <now>, 'тест');
-```
-
-Через кілька секунд воркер має його повернути (у лозі — «черга: повернуто
-доставки, що застрягли у sending»), а Telegram відхилить надсилання до
-неіснуючого чату (`chat not found`). Рядок після перевірки видаляється.
-
----
-
-## Обмеження (чесно)
-
-* **`/digest` — добірка за період реалізована**; історія алертів **переживає
-  рестарти**: вона в таблиці `alert_log` (Postgres, до переходу — SQLite), тож
-  `/digest daily` заповнює
-  не лише з часу запуску. Перевірено: у базі прод 13 849 алертів (з них 13 775
-  перенесені з SQLite з 9 листопада
-  19:31 і донині, а бот за цей час перезапускався. Реальна межа — інша: джерело
-  (`/api/events`) тримає лише 500 останніх подій, тож «глибше» за цю вікно
-  бот дістати не може.
-* **Курсор джерела.** `/api/events` не має серверного курсора (сервер тримає
-  500 подій), тому replay можливий лише в цих межах. При дірі бот позначає
-  алерти як неповні (`degraded`) і пише попередження в лог, а не надсилає
-  неповний алерт як повний.* **Дайджести не показують статистику підписок** — ані користувачеві, ані
-  адмінські. Це свідоме рішення, а не недолік.
-* **Асистент (`/api/ask`) вимкнено** за замовчуванням: LLM може процитувати
-  сирі дані з джерела.
-* **PostgresStore реалізовано** і прод уже працює на Postgres: бекенд
-  обирається конфігом (`[storage] backend = "postgres"`), драйвер — `sqlx`
-  (async, без блокування), черга доставок забирається через `FOR UPDATE SKIP
-  LOCKED` — тобто кілька воркерів можуть працювати з однією базою без
-  блокування один одного. SQLite-бекенд лишається доступним (fallback), а
-  мігратор `migrate-sqlite-to-postgres` переносить стан однією транзакцією.
-  Див. розділ «Сховище: Postgres» нижче.
-* **`/api/signals` і `/api/meta-subnets` тепер віддають 200.** Раніше ці маршрути
-  існували лише у вихідному коді, а на розгорнутій копії давали 404 — бот
-  деградував коректно (секція порожня, попередження в лозі), але сімейні сигнали
-  («хто накопичує, хто розподіляє») не доходили. Маршрути додано в Wallet Radar
-  **і на ноутбуці, і на прод-ВМ `.222`** (14 листопада 2026): тепер секція
-  `/api/signals` не порожня, і алерти показують частку емісії групи.
-* **Згортання широких сигналів реалізовано** (`[broadcast] digest_threshold_pct`):
-  сигнал, що долає до заданої частки активних користувачів, не надсилається
-  окремим повідомленням кожному, а згортається в одне зведене повідомлення за
-  вікно (`digest_window_secs`). Вузькі, персональні сигнали лишаються
-  детальними й негайними.
-* **Крос-а asset-правило агреговано:** `cross_asset_anomaly` тепер дає **один
-  алерт на вікно** (топ-3 активи) замість алерту на кожен актив.
-* **Межа буфера реалізована** (`[broadcast] max_backlog_minutes`): поки
-  джерело недоступне, черга буферизується; доставки, старші за межу,
-  скидаються без надсилання. «Джерело недоступне» = **сервер не відповів
-  узагалі** протягом понад 2 хв (відсутність маршруту, тобто 404, — не
-  збій; див. `docs/ARCHITECTURE.md` §8.3.1).
-
-> **Статус перемикання (9 листопада 2026).** Полер перенесено: старий
-> `wallet-radar-bot.service` — `disabled/inactive`, новий
-> `wallet-radar-alerts-bot.service` — `active + enabled` і працює з
-> **справжнім** токеном. Підписники (3) та їхні підписки (15) перенесені
-> підписки перенесено зі старого реєстру, серверний реєстр синхронізовано
-> (`users=3`). Код старого бота (`botd`) вилучено.
->
-> **Конфлікт поллерів (10 листопада 2026) — знайдено причину, конкурент
-> зупинено.** Стороннім полером був **не** бот на Windows, а Linux-сервіс
-> `wallet-radar-bot.service` (старий `botd` з `backfill/src/botd.rs`) на ВМ
-> `192.168.2.222` — з **тим самим** токеном (хеш `fe7f8264` збігається
-> бай у бай). Він і давав `409`: 88 разів за 24 години в його журналі.
-> Windows-задача `WalletRadarTelegramBot` — це лише **план** (`deploy/bot-windows`),
-> такої машини в мережі немає: у скані `192.168.2.0/24` жоден хост не має
-> відкритих `445/135/139/3389/5900`.
->
-> Розв'язання — `systemctl disable --now wallet-radar-bot.service` на `.222`
-> (юніт лишився на місці, піднімається одним `systemctl start`). **Перевірено
-> після перезавантаження ВМ:** `botd` не піднявся (`disabled`), `409` у нашому
-> журналі — 0.
->
-> **Комунікація preemp лишилася** як страховка: Telegram віддає `409`
-> **старшому** з двох `getUpdates` (перевірено експериментом), а новіший
-> перемагає. Тому після `409` бот повторює опитування за 2 с — його запит
-> перебиває чужий, і оновлення (команди) забираємо ми. Підтвердження оновлень
-> у Telegram спільне для токена: хто перший їх отримав — той забрав.
->
-> **Перевірено:** 10 листопада о 18:35 бот отримав і обробив команду `/stats`
-> (`telegram_offset` змінився з `0` на `237011080`) — попри конкурента, який
-> продовжує надсилати `409`.
->
-> Якщо конкурент зникне — нічого не зміниться; якщо повернеться — ми просто
-> знову перехопимо токен. Стан видно в `/stats` («команди: недоступні — на
-> токені вже працює інший поллер (409)»), а адміни отримують окреме
-> повідомлення про конфлікт і про відновлення.
->
-> **Реєстр на `.222` не оновлюється сам.** Коли `botd` був живий, він
-> синхронізував реєстр на сервер; тепер ніхто цього не робить, а сервер на
-> `.222` досі має Telegram увімкненим. Реєстр відновлюється вручну з БД
-> нашого бота (джерело правди):
->
-> ```bash
-> # на нашій ВМ: зібрати реєстр із bot.db і залити його на .222
-> curl -X POST -H "X-Telegram-Sync-Token: $TELEGRAM_SYNC_TOKEN" \
->   -H 'Content-Type: application/json' --data-binary @registry.json \
->   http://192.168.2.222:3000/api/telegram-users
-> ```
->
-> > **Не надсилайте порожній реєстр на сервер:** сервер замінює файл цілком,
-> > тому `{"users":{}}` стирає список підписників.
-
----
-
-## Ліцензія
-
-Proprietary. Wallet Radar — внутрішній продукт; цей бот — окремий сервіс, який
-користується його read-only API.
+<div align="right"><a href="#en">↑ English</a> · <a href="#ua">↑ Українська</a></div>
