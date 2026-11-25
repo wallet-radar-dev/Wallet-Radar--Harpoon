@@ -14,6 +14,7 @@
 use crate::jsmath::{js_num, js_round};
 use indexmap::{IndexMap, IndexSet};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// expand-worker.js:14-17
@@ -109,6 +110,21 @@ impl Graph {
             }
         }
         g
+    }
+
+    /// Undirected adjacency of the crawl graph: address → [(neighbour, tx count, usd volume)].
+    ///
+    /// The graph is undirected by construction (edges are stored as `a|b` with `a < b`),
+    /// so every edge is listed for both of its ends. Used by the capital-network
+    /// layout to measure degrees, hops between clusters and cross-cluster links.
+    pub fn adjacency(&self) -> HashMap<String, Vec<(String, u64, f64)>> {
+        let mut adj: HashMap<String, Vec<(String, u64, f64)>> = HashMap::new();
+        for (k, e) in &self.edges {
+            let Some((a, b)) = k.split_once('|') else { continue };
+            adj.entry(a.to_string()).or_default().push((b.to_string(), e.n, e.u));
+            adj.entry(b.to_string()).or_default().push((a.to_string(), e.n, e.u));
+        }
+        adj
     }
 
     pub fn persist(&self, file: &Path, now: i64) {

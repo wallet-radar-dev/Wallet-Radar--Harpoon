@@ -54,6 +54,7 @@ mod asset_groups;
 mod assetflow;
 mod balances;
 mod balances_cache;
+mod capital_network;
 mod concentration;
 mod connpath;
 mod coordgroup;
@@ -122,7 +123,7 @@ mod whale_positions;
 #[allow(dead_code)]
 mod whale_clusters;
 
-use axum::{extract::State, http::StatusCode, middleware::{self}, response::IntoResponse, routing::{delete, get, post}, Json, Router};
+use axum::{extract::{Query, State}, http::StatusCode, middleware::{self}, response::IntoResponse, routing::{delete, get, post}, Json, Router};
 use std::net::SocketAddr;
 use dataset::Dataset;
 use labels::Labels;
@@ -834,6 +835,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/login", post(login_route).with_state(auth_state.clone()))
         .route("/api/logout", post(logout_route).with_state(auth_state.clone()))
         .route("/api/capital-groups", get(|s: State<Ctx>| passthrough(s, "capital-groups.json", json!({"groups": []}))))
+        // «Структура групи капіталу та пов'язаних гаманців» — радіальна
+        // кластерна мережа: жовта група капіталу в центрі, сині кластери
+        // навколо, червоні виділені вузли, зелені вузли-з'єдначі.
+        .route("/api/capital-network", get(capital_network_route))
         // Активи груп капіталу з часткою емісії (від 1%), відсортовані за спаданням.
         .route("/api/group-assets", get(|s: State<Ctx>| passthrough(s, "group-assets.json", json!({"groups": []}))))
         .route("/api/asset-forensics", get(|s: State<Ctx>| passthrough(s, "asset-forensics.json", json!({"assets": []}))))
@@ -882,3 +887,47 @@ async fn main() -> anyhow::Result<()> {
 }
 
 
+
+/// `GET /api/capital-network` — «Структура групи капіталу та пов'язаних гаманців».
+///
+/// The picture is built from the real research groups (capital groups, whale
+/// clusters, discovered groups) and the crawl graph: the capital group with the
+/// largest capital sits in the centre, its directly connected wallets are laid
+/// out radially around the hub, and every other cluster is placed on a ring by
+/// its hop distance from the capital group. Green nodes are the conductors that
+/// link several groups at once; red ones are the wallets with many links
+/// inside the capital group.
+/// the asset scan (shares and common funders), not from hand-picked wallets.
+///
+/// `?group=<id>` draws a specific capital group; without it the one with the
+/// largest capital is drawn.
+async fn capital_network_route(
+    State(s): State<Ctx>,
+    Query(q): Query<CapitalNetworkQuery>,
+) -> impl IntoResponse {
+    let capital = s.dataset.read_or("capital-groups.json", json!({"groups": []}));
+    let whale = s.dataset.read_or("whale-clusters.json", json!({"clusters": []}));
+    let discovered = s.dataset.read_or("discovered-groups.json", json!({"groups": []}));
+    let conductors = s.dataset.read_or("conductors.json", json!({"conductors": []}));
+    let labels = s.dataset.read_or("labels-cache.json", json!({}));
+    let forensics = s.dataset.read_or("asset-forensics.json", json!({"fingerprints": {}}));
+    let fingerprints = forensics["fingerprints"].clone();
+    let asset_scan = s.dataset.read_or("wallet-asset-scan.json", json!({"assets": []}));
+    // The full membership of every group — the capital groups file keeps only
+    // a sample of the wallets.
+    let membership = s
+        .dataset
+        .read_or("backfill/group-membership.json", json!({"wallets": {}}));
+    let adj = s.graph.lock().map(|g| g.adjacency()).unwrap_or_default();
+    let net = capital_network::Net::new(adj);
+    Json(capital_network::capital_network(
+        &capital, &whale, &discovered, &conductors, &labels, &fingerprints, &asset_scan,
+        &net, q.group.as_deref(), &membership,
+    ))
+}
+
+/// Query of `GET /api/capital-network` — which capital group to draw.
+#[derive(serde::Deserialize)]
+struct CapitalNetworkQuery {
+    group: Option<String>,
+}

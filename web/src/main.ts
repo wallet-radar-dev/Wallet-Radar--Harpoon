@@ -39,6 +39,11 @@ import { openTrackRecord } from "./trackrecord";
 import { openBulkCheck } from "./check";
 import { openExitPressure } from "./exitpressure";
 import { initFreshness } from "./freshness";
+import {
+  openCapitalNetwork, closeCapitalNetwork,
+  reloadCapitalNetwork, setupCapitalNetworkInteractions, fitCapitalNetworkView,
+  setCapitalNetworkFilter, capitalNetworkFilterState, setCapitalNetworkGroup,
+} from "./capital-network";
 import { openEventModal, openGroupAlert, closeEventModal } from "./event-modal";
 import {
   openGraph, closeGraph, openGraphForWallet, openSmartMoney,
@@ -62,6 +67,7 @@ nav.closeOverlays = (): void => {
   document.getElementById("sm-modal")?.classList.add("hidden");
   closeConcentration(); closeAssetHolders(); closeGraph(); closeTracer();
   closeDashboard(); closeEntityProfile(); closeEventModal(); closeAlerts();
+  closeCapitalNetwork();
 };
 nav.openWallet = openWalletAddress;
 nav.groupStats = loadGroupStats;
@@ -549,7 +555,7 @@ function init(): void {
   });
 
   document.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") { closeEventModal(); closeGraph(); closePortfolio(); closeAssetHolders(); closeTracer(); closeAlerts(); closeEntityProfile(); closeDashboard(); closeConcentration(); closeSearch(); }
+    if (e.key === "Escape") { closeEventModal(); closeGraph(); closePortfolio(); closeAssetHolders(); closeTracer(); closeAlerts(); closeEntityProfile(); closeDashboard(); closeConcentration(); closeSearch(); closeCapitalNetwork(); }
   });
   setupDialogFocusManagement();
 
@@ -612,6 +618,14 @@ function init(): void {
   setupGraphInteractions();
 
   void loadUniverse();
+  // Структура групи капіталу — радіальна мережа (2D / 3D)
+  $("#capital-net-btn").addEventListener("click", openCapitalNetwork);
+  $("#cn-close").addEventListener("click", closeCapitalNetwork);
+  $("#cn-reload").addEventListener("click", () => void reloadCapitalNetwork());
+  $("#cn-fit").addEventListener("click", fitCapitalNetworkView);
+  $("#cn-filter").addEventListener("click", () => setCapitalNetworkFilter(!capitalNetworkFilterState()));
+  $("#cn-group").addEventListener("change", (e) => setCapitalNetworkGroup((e.target as HTMLSelectElement).value));
+  setupCapitalNetworkInteractions();
   void startData();
 }
 

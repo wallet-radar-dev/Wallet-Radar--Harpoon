@@ -682,7 +682,7 @@ export async function loadCapitalGroups(): Promise<void> {
   el.innerHTML = `<div class="text-[11px] text-slate-500">${t("cg_loading")}</div>`;
   try {
     const [d, af, wc, hist, gdb, dg, feat, wf, cond, cnets, hlth] = await Promise.all([
-      getJSON<{ groups: Array<{ size: number; members: Array<{ address: string; label: string | null; count: number }>; commonAssets: string[] }> }>("/api/capital-groups"),
+      getJSON<{ groups: Array<{ id?: string; name?: string; size: number; commonAssets?: string[]; members: Array<{ address: string; label: string | null; count?: number; hop?: number | null }> }> }>("/api/capital-groups"),
       getJSON<{ status?: { cycle: number; processed: number; total: number; running: boolean }; assets: Array<{ symbol: string; rank: number; groups: Array<{ combinedShare: number; members: Array<{ addr: string; share: number }>; commonFunders: Array<{ funder: string; avgUsd: number }> }> }> }>("/api/asset-forensics").catch((): { status?: { cycle: number; processed: number; total: number; running: boolean }; assets: never[] } => ({ assets: [] })),
       getJSON<{ clusters: Array<{ id: string; label: string; combinedUsd: number; assets: string[]; assetCount: number; members: Array<{ addr: string; totalUsd: number; top: string[] }>; evidence: { mirrorPairs: number; sharedFunders: Array<{ funder: string }> } }> }>("/api/whale-clusters").catch(() => ({ clusters: [] as never[] })),
       getJSON<{ series: Array<{ t: number; count: number }> }>("/api/history", { key: "clusters" }).catch(() => ({ series: [] as never[] })),
@@ -749,10 +749,10 @@ export async function loadCapitalGroups(): Promise<void> {
         </div>`).join("");
     }
     html += (d.groups || []).map((g, i) => `<div class="rounded-lg border border-edge bg-panel2 p-2">
-        <div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-accent">🏛 ${t("cg_title")} ${i + 1}</span><span class="text-[11px] text-slate-500">${g.size} ${t("cg_members")}</span></div>
-        ${g.commonAssets.length ? `<div class="text-[11px] text-slate-400 mb-1">${t("cg_assets")}: <span class="text-slate-300">${g.commonAssets.join(", ")}</span></div>` : ""}
-        ${g.members.slice(0, 6).map((m) => `<div class="text-[11px] text-slate-500 truncate"><span data-wallet-addr="${escAttr(m.address)}" class="font-mono cursor-pointer hover:text-accent">${m.label || shortAddr(m.address)}</span> · ${m.count}</div>`).join("")}
-        ${g.members.length >= 2 ? `<div class="flex gap-1 mt-1.5">
+        <div class="flex items-center justify-between mb-1"><span class="text-xs font-medium text-accent">🏛 ${g.id || g.name || `${t("cg_title")} ${i + 1}`}</span><span class="text-[11px] text-slate-500">${g.size} ${t("cg_members")}</span></div>
+        ${(g.commonAssets || []).length ? `<div class="text-[11px] text-slate-400 mb-1">${t("cg_assets")}: <span class="text-slate-300">${(g.commonAssets || []).join(", ")}</span></div>` : ""}
+        ${(g.members || []).slice(0, 6).map((m) => `<div class="text-[11px] text-slate-500 truncate"><span data-wallet-addr="${escAttr(m.address)}" class="font-mono cursor-pointer hover:text-accent">${m.label || shortAddr(m.address)}</span>${m.count !== undefined ? ` · ${m.count}` : (m.hop !== undefined && m.hop !== null ? ` · ${m.hop} hop` : "")}</div>`).join("")}
+        ${(g.members || []).length >= 2 ? `<div class="flex gap-1 mt-1.5">
           <button data-cg-link="${escAttr(g.members[0].address)}|${escAttr(g.members[1].address)}" class="flex-1 text-[11px] px-1.5 py-1 rounded bg-accent/15 text-accent border border-accent/30 hover:bg-accent/25 transition">${t("cg_check")}</button>
           <button data-cg-coord="${escAttr(g.members.map((m) => m.address).join(","))}" class="flex-1 text-[11px] px-1.5 py-1 rounded bg-fuchsia-500/15 text-fuchsia-400 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 transition">${t("cg_coord")}</button>
         </div><div data-cg-res class="text-[11px] mt-1 space-y-0.5"></div>` : ""}
