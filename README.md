@@ -69,6 +69,40 @@ public version does not have).
 > The public version also lacks `rust-server/src/groupgraph.rs` and part of the `nextaction`
 > binaries (29 of the 73 listed in `Cargo.toml`), so these crates do not build without them.
 
+<a name="en-bot"></a>
+## 📨 Telegram alerts bot (a separate service)
+
+The Telegram bot is **not part of this repository**. It is a separate product,
+`wallet-radar-alerts-bot`, that talks to Wallet Radar exactly like any other
+external service: **read-only, over REST + WebSocket** (`/api/signals`,
+`/api/events`, `/api/meta-subnets`). The bot modifies nothing here, and its
+code deliberately does not live in this tree.
+
+- **Where the code is:**
+  - this repository, branch
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot)
+    — the public copy;
+  - the private repository `vitalii/wallet-radar-alerts-bot` in our Forgejo
+    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — the
+    working copy.
+- **Why it is separate:** the old in-tree poller (`botd`) was removed in
+  `e2e777a` — two bots sharing one Telegram token were the source of 409
+  poller conflicts. The new bot runs as its own systemd unit, with its own
+  token and its own state.
+- **Runtime:** a Rust workspace (`crates/*`, `bot/`); storage in **Postgres**
+  through `sqlx` (the delivery queue is claimed with `FOR UPDATE SKIP LOCKED`),
+  with SQLite kept as a fallback. Deployed to `/opt/wallet-radar-alerts-bot`,
+  unit `wallet-radar-alerts-bot.service`, secrets in its own `.env`
+  (`TELEGRAM_BOT_TOKEN`, `POSTGRES_URL`, …).
+- **Privacy by construction:** neither outgoing messages nor the database
+  contain real addresses or transaction hashes — the `root` address from
+  `/api/signals` is hashed client-side into an `opaque_id`.
+- **Commands:** `/assets`, `/groups`, `/signal <SYMBOL>`, `/digest daily|weekly`,
+  `/settings`, `/mute`, `/unmute`, `/language uk|en`; admin: `/broadcast`,
+  `/stats`, `/users`, `/block`, `/unblock`, `/health`. The assistant
+  (`/api/ask`) is **disabled by default**, because an LLM can quote raw source
+  data.
+
 <a name="en-what"></a>
 ## 🎯 What it does
 
@@ -342,6 +376,38 @@ Proprietary. © 2026 Vitalii Vedana. All rights reserved. See [`LICENSE`](LICENS
 > [!NOTE]
 > У публічній версії також бракує `rust-server/src/groupgraph.rs` і частини бінів `nextaction`
 > (29 із 73, перелічених у `Cargo.toml`), тому без них ці крейти не збираються.
+
+<a name="ua-bot"></a>
+## 📨 Telegram-бот алертів (окремий сервіс)
+
+Telegram-бот **не входить до цього репозиторію**. Це окремий продукт
+`wallet-radar-alerts-bot`, який говорить з Wallet Radar так само, як будь-який
+зовнішній сервіс: **лише на читання, через REST + WebSocket** (`/api/signals`,
+`/api/events`, `/api/meta-subnets`). Бот нічого тут не змінює, а його код свідомо
+не живе в цьому дереві.
+
+- **Де код:**
+  - у цьому репозиторії, гілка
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot)
+    — публічна копія;
+  - у приватному репозиторії `vitalii/wallet-radar-alerts-bot` нашого Forgejo
+    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — робоча
+    копія.
+- **Чому окремо:** старий полер у дереві (`botd`) прибрано в `e2e777a` — два
+  боти з одним токеном Telegram і були джерелом конфліктів полерів (409). Новий
+  бот працює як окремий юніт systemd, зі своїм токеном і своїм станом.
+- **Рантайм:** Rust-воркспейс (`crates/*`, `bot/`); сховище — **Postgres** через
+  `sqlx` (чергу доставок забирається з `FOR UPDATE SKIP LOCKED`), SQLite лишається
+  як fallback. Розгортання — `/opt/wallet-radar-alerts-bot`, юніт
+  `wallet-radar-alerts-bot.service`, секрети у власному `.env`
+  (`TELEGRAM_BOT_TOKEN`, `POSTGRES_URL`, …).
+- **Приватність за конструкцією:** ані у вихідних повідомленнях, ані в базі
+  немає реальних адрес чи хешів транзакцій — адреса `root` із `/api/signals`
+  хешується на боці клієнта в `opaque_id`.
+- **Команди:** `/assets`, `/groups`, `/signal <SYMBOL>`, `/digest daily|weekly`,
+  `/settings`, `/mute`, `/unmute`, `/language uk|en`; адмінські: `/broadcast`,
+  `/stats`, `/users`, `/block`, `/unblock`, `/health`. Асистент (`/api/ask`)
+  **вимкнено за замовчуванням**, бо LLM може процитувати сирі дані джерела.
 
 <a name="ua-what"></a>
 ## 🎯 Що це робить
