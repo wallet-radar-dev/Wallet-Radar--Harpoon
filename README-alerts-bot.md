@@ -367,10 +367,26 @@ POSTGRES_TEST_URL="postgres://wr:$(cat /opt/wallet-radar-alerts-bot/secrets/pg_p
 
 ---
 
-## Код у Forgejo
+## Де лежить код бота
 
-Репозиторій: `vitalii/wallet-radar-alerts-bot` (приватний, Forgejo на цій самій
-машині, SSH на порту `2222`).
+Код бота живе у **двох** репозиторіях, і це важливо розуміти, бо історії в них
+**різні** (спільного кореня немає):
+
+| Репозиторій | Роль | Гілка |
+|---|---|---|
+| `vitalii/wallet-radar-alerts-bot` (Forgejo, приватний) | **робоча копія** — тут пишемо код | `master` |
+| `wallet-radar-dev/Wallet-Radar--Harpoon` (GitHub, публічний) | **публічна копія** — тут бот уже лежить у дереві проєкту | `main` |
+
+Публічна копія з'явилася через PR #13 «Feat/telegram alerts bot» (злито
+25.11.2026): гілка `feat/telegram-alerts-bot` була злита в `main` разом із
+кодом бота, а README бота збережений у публічному репо окремим файлом
+`README-alerts-bot.md`. Окремого приватного репозиторію бота на GitHub
+(`Vitalii-Vedana/wallet-radar-alerts-bot`) так і не створили — публікація
+йшла через репозиторій Wallet Radar, і цього достатньо.
+
+Тому **копіювати SHA між репозиторіями не можна**: `git push github
+master:main` буде відхилено (історії не пов'язані). Правильний шлях —
+накласти стан бота на `main` публічного репо і відкрити PR.
 
 ### Як комітити (один крок замість шести)
 
@@ -380,9 +396,10 @@ cd /root/src/wallet-radar-alerts-bot
 ```
 
 Скрипт сам: перевірить гілку й чистоту дерева, покаже, що зміниться,
-закомітить, запушить у **Forgejo** (`origin master` — приватна основна копія)
-і в **GitHub** (`github master:feat/telegram-alerts-bot` — публічна копія), а
-потім звірить, що локальний коміт, Forgejo і GitHub — одна й та сама SHA.
+закомітить, запушить у **Forgejo** (`origin master` — приватна робоча копія),
+потім візьме `main` публічного репо, накладе на нього стан бота і запушить
+це гілкою `bot/sync-<час>` — **гілка готова до PR**. Далі лишається створити
+PR у GitHub (посилання скрипт друкує) і злити його.
 
 Якщо руками — той самий порядок, нічого не пропускайте:
 
@@ -392,29 +409,43 @@ git switch master                       # пуш можливий лише з ma
 git status --short                      # що змінено
 git diff --stat                         # наскільки змінилось
 git add -A && git commit -m "текст"     # коміт
-git push origin master                  # Forgejo (приватний, основний)
-GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
-  git push github master:feat/telegram-alerts-bot   # GitHub (публічний)
+git push origin master                  # Forgejo (приватний, робочий)
+
+# далі — публічна копія: гілка від main + накладання стану бота
+git fetch github main
+git worktree add --detach /tmp/pub github/main
+git -C /tmp/pub checkout master -- bot crates tools deploy config.example.toml
+git show master:README.md > /tmp/pub/README-alerts-bot.md
+git -C /tmp/pub add -A
+git -C /tmp/pub commit -m "Бот: <текст коміту>"
+git -C /tmp/pub push github HEAD:refs/heads/bot/sync-$(date +%Y%m%d-%H%M%S)
+git worktree remove --force /tmp/pub
 ```
 
-Звірка (усі три мають збігатися):
+Звірка приватної копії (вона має збігатися з локальною):
 
 ```bash
 git rev-parse master
 git ls-remote origin refs/heads/master
-GIT_SSH_COMMAND="ssh -i /root/.ssh/github_key -o IdentitiesOnly=yes" \
-  git ls-remote github refs/heads/feat/telegram-alerts-bot
 ```
 
 **Якщо push відхилено:**
-* `Updates were rejected` (non-fast-forward) — хтось дописав у гілку на
-  GitHub: `git pull --rebase github feat/telegram-alerts-bot`, розв'язати
-  конфлікти, повторити push;
+* `Updates were rejected` (non-fast-forward) на Forgejo — хтось дописав у
+  `master`: `git pull --rebase origin master`, розв'язати конфлікти, повторити;
 * `protected branch` — у GitHub: Settings → Branches → Branch protection rules
   → зняти захист (зараз захисту немає на жодній гілці);
 * `Permission denied (publickey)` — для Forgejo потрібен ключ за замовчуванням
   (`/root/.ssh/id_ed25519`), для GitHub — `/root/.ssh/github_key`; не плутайте
   їх: у скрипті Forgejo перевіряється **без** `GIT_SSH_COMMAND` від GitHub.
+
+### Код на GitHub: публічний репозиторій Wallet Radar
+
+Публічна копія — це репозиторій проєкту, тож бот лежить у ньому разом із
+проєктом:
+
+* код бота: `bot/`, `crates/{admin,alert-engine,broadcast,privacy-filter,storage,telegram-gateway,user-session,wr-client}/`;
+* README бота: `README-alerts-bot.md` (головний `README.md` належить проєкту);
+* юніти й скрипти: `deploy/wallet-radar-alerts-bot.service`, `tools/`.
 
 
 

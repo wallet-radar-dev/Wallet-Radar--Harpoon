@@ -211,9 +211,18 @@ fi
 # доказ, який треба читати з машини. Тому додатково пушимо звіт у приватний
 # репозиторій окремою гілкою: його видно у Forgejo-UI навіть без SSH.
 # Клон робимо в тимчасовій директорії, щоб не бруднити робочу копію репозиторію.
+#
+# Важливо: клонуємо БЕЗ --depth 1. Пуш із «shallow»-клону Forgejo відхиляє
+# («shallow update not allowed»), тож звіт не пушився взагалі. Також гілку
+# звітів беремо з віддаленого репозиторію, щоб push був fast-forward.
 REPORT_BRANCH="postboot-report"
 REPORT_DIR="$(mktemp -d)"
-if timeout 90 git clone --quiet --depth 1 "$SSH_URL" "$REPORT_DIR/r" >/dev/null 2>&1; then
+if timeout 180 git clone --quiet "$SSH_URL" "$REPORT_DIR/r" >/dev/null 2>&1; then
+    if git -C "$REPORT_DIR/r" rev-parse --verify --quiet "origin/${REPORT_BRANCH}" >/dev/null 2>&1; then
+        git -C "$REPORT_DIR/r" checkout -q -B "$REPORT_BRANCH" "origin/${REPORT_BRANCH}"
+    else
+        git -C "$REPORT_DIR/r" checkout -q -B "$REPORT_BRANCH" master
+    fi
     {
         echo "# Звіт автотесту після перезавантаження"
         echo
