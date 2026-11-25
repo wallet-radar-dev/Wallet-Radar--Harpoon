@@ -1,0 +1,13 @@
+[Unit]
+Description=Періодична перевірка: оновити remote Wallet Radar, коли ВМ доступна
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Трохи розкидаємо старт, щоб не смикати Forgejo надто часто.
+RandomizedDelaySec=60
+Persistent=true
+Unit=wra-fix-remote.service
+
+[Install]
+WantedBy=timers.target

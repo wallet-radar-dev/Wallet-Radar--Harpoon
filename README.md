@@ -72,15 +72,15 @@ public version does not have).
 <a name="en-bot"></a>
 ## 📨 Telegram alerts bot (a separate service)
 
-The Telegram bot is **not part of this repository**. It is a separate product,
-`wallet-radar-alerts-bot`, that talks to Wallet Radar exactly like any other
-external service: **read-only, over REST + WebSocket** (`/api/signals`,
-`/api/events`, `/api/meta-subnets`). The bot modifies nothing here, and its
-code deliberately does not live in this tree.
+The Telegram bot is a separate product, `wallet-radar-alerts-bot`, that talks
+to Wallet Radar exactly like any other external service: **read-only, over
+REST + WebSocket** (`/api/signals`, `/api/events`, `/api/meta-subnets`).
+The bot modifies nothing here. Its code lives in this tree (`crates/*`,
+`bot/`), and its own documentation — [`README-alerts-bot.md`](README-alerts-bot.md).
 
 - **Where the code is:**
-  - this repository, branch
-    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot)
+  - this repository (merged via PR #13 from the branch
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
     — the public copy;
   - the private repository `vitalii/wallet-radar-alerts-bot` in our Forgejo
     (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — the
@@ -380,15 +380,15 @@ Proprietary. © 2026 Vitalii Vedana. All rights reserved. See [`LICENSE`](LICENS
 <a name="ua-bot"></a>
 ## 📨 Telegram-бот алертів (окремий сервіс)
 
-Telegram-бот **не входить до цього репозиторію**. Це окремий продукт
-`wallet-radar-alerts-bot`, який говорить з Wallet Radar так само, як будь-який
-зовнішній сервіс: **лише на читання, через REST + WebSocket** (`/api/signals`,
-`/api/events`, `/api/meta-subnets`). Бот нічого тут не змінює, а його код свідомо
-не живе в цьому дереві.
+Telegram-бот — це окремий продукт `wallet-radar-alerts-bot`, який говорить з
+Wallet Radar так само, як будь-який зовнішній сервіс: **лише на читання, через
+REST + WebSocket** (`/api/signals`, `/api/events`, `/api/meta-subnets`).
+Бот нічого тут не змінює. Його код живе в цьому дереві (`crates/*`, `bot/`),
+а його власна документація — [`README-alerts-bot.md`](README-alerts-bot.md).
 
 - **Де код:**
-  - у цьому репозиторії, гілка
-    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot)
+  - у цьому репозиторії (злито через PR #13 з гілки
+    [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
     — публічна копія;
   - у приватному репозиторії `vitalii/wallet-radar-alerts-bot` нашого Forgejo
     (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — робоча

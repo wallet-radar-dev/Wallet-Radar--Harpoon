@@ -1,0 +1,36 @@
+[Unit]
+Description=Wallet Radar Alerts Bot — багатокористувацький Telegram-бот з алертами
+Documentation=file:///opt/wallet-radar-alerts-bot/README.md
+After=network-online.target wallet-radar-rust.service docker.service
+Wants=network-online.target
+# Сховище — Postgres у контейнері `wr-postgres`; контейнер піднімає сам
+# docker (--restart unless-stopped), тож бот має стартувати після нього.
+# саме Wants, а не Requires: якщо docker перезапустити, бот не має
+# зупинитися назавжди — він упаде з помилкою підключення, і systemd
+# підніме його знову (Restart=on-failure).
+Wants=docker.service
+# Обмеження рестартів: якщо бот падає підряд — не крутимо безкінечний цикл.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/wallet-radar-alerts-bot
+EnvironmentFile=/opt/wallet-radar-alerts-bot/.env
+ExecStart=/opt/wallet-radar-alerts-bot/bin/bot /opt/wallet-radar-alerts-bot/config.toml
+# on-failure, а не always: бот, який завершився через 409 (на токені вже
+# працює інший полер), виходить із помилкою — і systemd піднімає його ще
+# раз, але не більше 5 разів за 5 хвилин. Так бот не лишається мертвим
+# надовго, але й не крутить безкінечний цикл старт/409/старт.
+Restart=on-failure
+RestartSec=15
+# Зупинка має встигнути перервати довге опитування Telegram (25 с).
+# Якщо systemd уб'є процес раніше, «мертве» getUpdates-з'єднання дасть
+# наступному інстансу 409 Conflict.
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
