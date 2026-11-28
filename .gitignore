@@ -110,3 +110,10 @@ deploy/.es-backfill-done
 backfill/*.bak-*
 features/target/
 deploy/py-retired/
+
+# ── Згенеровані звіти, архів «old» і кеші компіляції — поза git ────────────
+reports/
+old/
+*/target/
+*.rej
+server/data.json.tmp.*
