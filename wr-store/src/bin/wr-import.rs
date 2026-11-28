@@ -825,6 +825,10 @@ fn cmd_extract() -> Result<()> {
 
 // ─────────────────────────── завантаження ───────────────────────────
 
+/// Нульова адреса. Не гаманець: ефемірний burn-тег для неї потрібен, а
+/// рядок у `wallets` — ні (див. розділ «спалені адреси» нижче).
+const NULL_ADDR: &str = "0x0000000000000000000000000000000000000000";
+
 const CHAINS: &[(&str, &str, &str)] = &[
     ("eth", "Ethereum", "ETH"),
     ("arbitrum", "Arbitrum One", "ETH"),
@@ -1217,9 +1221,33 @@ fn cmd_load() -> Result<()> {
     // ── спалені адреси ──
     let burn = seed("burn.json")?;
     let mut n_burn = 0usize;
+    let mut n_burn_tag_only = 0usize;
     for v in arr(&burn) {
-        let addr = v.as_str().unwrap_or_default().to_string();
+        let addr = v.as_str().unwrap_or_default().to_lowercase();
         if addr.is_empty() {
+            continue;
+        }
+        // НУЛЬОВА адреса — НЕ гаманець і не сутність. ETH, що туди потрапив,
+        // згорів, тож тег `burn` їй потрібен (емісія не має рахувати цей
+        // баланс). Але її вид мусить лишатися 'unknown': інакше вона виглядає
+        // біржою й з'являється в стрічці як сутність («Burn»), де її бути не
+        // повинно — саме на цьому розходилися golden-тести з оракулом.
+        //
+        // Рядок у `wallets` потрібен: на нього посилається FK з `wallet_tags`.
+        // Тег лишається, вид — 'unknown', мітка — порожня.
+        if addr == NULL_ADDR {
+            tx.execute(
+                "INSERT INTO wallets(chain,address,kind,label,source)
+                 VALUES ('eth',?1,'unknown',NULL,'is_burn()')
+                 ON CONFLICT(chain,address) DO UPDATE SET kind='unknown', label=NULL",
+                rusqlite::params![addr],
+            )?;
+            tx.execute(
+                "INSERT INTO wallet_tags(chain,address,tag,source)
+                 VALUES ('eth',?1,'burn','is_burn()') ON CONFLICT DO NOTHING",
+                rusqlite::params![addr],
+            )?;
+            n_burn_tag_only += 1;
             continue;
         }
         tx.execute(

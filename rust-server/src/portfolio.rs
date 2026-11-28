@@ -988,6 +988,37 @@ pub fn build_portfolio(universe: &[Value], profile: &str, flow_tilt: &Value, max
 mod tests {
     use super::*;
 
+    /// Позиції одного ешелону каскаду: `cascade[]` — єдине місце, де реально
+    /// живуть holdings. `sleeves{}` несут лише цілі та роль («ядро»/«сателіт»
+    /// у старій формі) — тому дивитися треба саме в каскад.
+    fn tier_holdings<'a>(out: &'a Value, tier: &str) -> Vec<&'a Value> {
+        out["cascade"]
+            .as_array()
+            .map(|cs| {
+                cs.iter()
+                    .filter(|c| c["tier"].as_str() == Some(tier))
+                    .flat_map(|c| c["holdings"].as_array().map(|h| h.iter()).unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// «Ядро» = ешелон фундаменту (large), «сателіт» = решта ешелонів.
+    /// Так само визначено в `build_portfolio` («"ядро" = фундамент,
+    /// "сателіт" = все інше»), тож тест має читати те саме, що бачить клієнт.
+    fn core_and_satellite(out: &Value) -> (Vec<String>, Vec<String>) {
+        let core: Vec<String> = tier_holdings(out, "large")
+            .iter()
+            .map(|h| h["sym"].as_str().unwrap_or("").to_string())
+            .collect();
+        let sat: Vec<String> = ["mid", "small", "risk"]
+            .iter()
+            .flat_map(|t| tier_holdings(out, t))
+            .map(|h| h["sym"].as_str().unwrap_or("").to_string())
+            .collect();
+        (core, sat)
+    }
+
     #[test]
     fn only_altcoins_in_risk_sleeves() {
         let inputs: Value = serde_json::from_str(&fixture!("portfolio-input.json")).unwrap();
@@ -1002,13 +1033,12 @@ mod tests {
                 &c["flowTilt"],
                 c["maxTopHolder"].as_i64().unwrap_or(0),
             );
-            for sleeve in ["core", "satellite"] {
-                let hs = out["sleeves"][sleeve]["holdings"].as_array().unwrap();
-                for h in hs {
+            for tier in ["large", "mid", "small", "risk"] {
+                for h in tier_holdings(&out, tier) {
                     let sym = h["sym"].as_str().unwrap_or("").to_uppercase();
                     assert!(
                         !BANNED.contains(&sym.as_str()),
-                        "case {i}: у рукаві {sleeve} опинився не-альткоїн {sym}"
+                        "case {i}: в ешелоні {tier} опинився не-альткоїн {sym}"
                     );
                 }
             }
@@ -1025,15 +1055,11 @@ mod tests {
             &c["flowTilt"],
             c["maxTopHolder"].as_i64().unwrap_or(0),
         );
-        let core: Vec<String> = out["sleeves"]["core"]["holdings"].as_array().unwrap()
-            .iter().map(|h| h["sym"].as_str().unwrap_or("").to_string()).collect();
-        let sat: Vec<String> = out["sleeves"]["satellite"]["holdings"].as_array().unwrap()
-            .iter().map(|h| h["sym"].as_str().unwrap_or("").to_string()).collect();
+        let (core, sat) = core_and_satellite(&out);
 
         assert!(!core.is_empty(), "ядро не має лишатися порожнім після фільтра мажорів");
         for sym in &core {
             assert!(!sat.contains(sym), "{sym} дублюється в ядрі й сателіті");
         }
     }
-
 }
