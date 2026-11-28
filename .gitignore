@@ -90,3 +90,23 @@ config.toml
 !config.example.toml
 *.log
 .DS_Store
+
+# ── Локальні env-файли з секретами (напр. deploy/core.env) — поза git ───────
+*.env
+!*.env.example
+
+# ── Робочі артефакти машин: бекапи, кеші, журнали, pid-файли — поза git ─────
+deploy/backups/
+deploy/.linecount/
+deploy/.backup-*/
+deploy/*.out
+deploy/*.pid
+deploy/*.bak
+deploy/*.bak-*
+deploy/*.backup-*
+deploy/.*-prev.txt
+deploy/.backfill-*
+deploy/.es-backfill-done
+backfill/*.bak-*
+features/target/
+deploy/py-retired/
