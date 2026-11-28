@@ -59,7 +59,7 @@ registry_sync_interval_secs = 60
 # Telegram, але його реєстр не оновлюється, підписки розходять: нові
 # підписники не отримують серверних алертів.
 registry_sync_extra_urls = []
-# registry_sync_extra_urls = ["http://192.168.2.222:3000"]
+# registry_sync_extra_urls = ["http://<wallet-radar-host>:3000"]
 
 [storage]
 backend = "sqlite"               # sqlite | postgres

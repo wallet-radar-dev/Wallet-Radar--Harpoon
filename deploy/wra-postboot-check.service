@@ -6,6 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Локальні адреси живуть поза Git — див. tools/local-env.sh.
+EnvironmentFile=-/etc/wallet-radar/local.env
 # Трохи чекаємо: Wi-Fi може підніматися пізніше за Forgejo.
 ExecStart=/bin/sleep 45
 ExecStart=/root/src/wallet-radar-alerts-bot/tools/postboot-check.sh

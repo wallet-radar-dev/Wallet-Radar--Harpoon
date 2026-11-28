@@ -65,7 +65,7 @@ sqlite_path = "/tmp/wra-live.db"
 mask = "приховано"
 
 [admin]
-usernames = ["vitalii_vedana"]
+usernames = ["smoke_admin"]
 
 [[alerts.rules]]
 kind = "whale_accumulation"
@@ -138,7 +138,7 @@ tail -25 /tmp/wra-bot.log || true
 echo
 echo "→ фаза 4: перевіряю /health через мок"
 cat > "$UPDATES" <<'JSON'
-{"ok":true,"result":[{"update_id":9001,"message":{"message_id":9001,"date":1700000000,"chat":{"id":424243,"type":"private"},"from":{"id":424243,"is_bot":false,"first_name":"Smoke","username":"vitalii_vedana"},"text":"/health"}}]}
+{"ok":true,"result":[{"update_id":9001,"message":{"message_id":9001,"date":1700000000,"chat":{"id":424243,"type":"private"},"from":{"id":424243,"is_bot":false,"first_name":"Smoke","username":"smoke_admin"},"text":"/health"}}]}
 JSON
 : > "$OUT"
 start_bot

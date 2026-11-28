@@ -1,6 +1,6 @@
 [Unit]
 Description=Wallet Radar — Rust backend + всі 20 фонових воркерів
-Documentation=https://127.0.0.1:3030/vitalii/wallet-tracker
+Documentation=file:///opt/wallet-tracker/README.md
 After=network-online.target
 Wants=network-online.target
 

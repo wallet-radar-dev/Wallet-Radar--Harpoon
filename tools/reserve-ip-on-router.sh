@@ -1,12 +1,12 @@
 #!/bin/bash
-# DHCP-резервація адреси Forgejo-хоста на Tenda-роутері.
+# DHCP-резервація адреси Forgejo-хоста на домашньому роутері.
 #
-# Навіщо: SSH_DOMAIN у /etc/forgejo/app.ini вказує IP ноутбука, а IP
-# видається по DHCP і вже змінювався (.112 → .104). Резервація прив'язує
-# адресу до MAC — тож після будь-якого перезавантаження ноутбук знову
-# отримає ту саму адресу, і clone-URL у Forgejo лишатиметься правильним.
+# Навіщо: SSH_DOMAIN у /etc/forgejo/app.ini вказує IP робочої станції, а IP
+# видається по DHCP і вже змінювався. Резервація прив'язує адресу до MAC —
+# тож після будь-якого перезавантаження машина знову отримає ту саму
+# адресу, і clone-URL у Forgejo лишатиметься правильним.
 #
-# Роутер: Tenda, веб-інтерфейс на http://192.168.2.1, модуль «Advanced» →
+# Роутер: веб-інтерфейс (адреса — у змінній ROUTER), модуль «Advanced» →
 # «Static IP List» (внутрішньо: goform/setNAT, поле staticList).
 #
 # Формат значення staticList: "<IP>\t<MAC>\t<REMARK>" — рядки розділені \n.
@@ -16,8 +16,13 @@
 # Ідемпотентний: якщо запис уже є — нічого не змінює.
 set -euo pipefail
 
-ROUTER="${ROUTER:-192.168.2.1}"
-IP="${IP:-192.168.2.104}"
+# Адреса роутера й адреса, яку резервуємо, — поза Git (tools/local-env.sh).
+. "$(dirname "$0")/local-env.sh"
+wr_load_local_env
+# IP — це адреса, яку резервуємо; за замовчуванням та сама, що EXPECT_IP.
+IP="${IP:-${EXPECT_IP:-}}"
+wr_require ROUTER IP || exit 1
+
 MAC="${MAC:-$(ip link show "$(ip route get 1.1.1.1 | awk '{print $5; exit}')" \
     | grep -oE 'link/ether [0-9a-f:]+' | cut -d' ' -f2 | tr 'a-f' 'A-F')}"
 REMARK="${REMARK:-forgejo-host}"

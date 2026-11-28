@@ -1,8 +1,8 @@
 #!/bin/bash
 # Оновлення remote у Wallet Radar на Forgejo: адреса SSH-сервера змінилась
-# (ноутбук тепер 192.168.2.104, Forgejo слухає SSH_DOMAIN з app.ini).
+# (робоча станція з Forgejo слухає SSH_DOMAIN з app.ini).
 #
-# Користуватися, коли ВМ 192.168.2.222 доступна за SSH.
+# Користуватися, коли ВМ (VM_HOST) доступна за SSH.
 #
 #   ./tools/fix-remote-after-ip-change.sh
 #
@@ -14,12 +14,13 @@
 # падала з «Permission denied (publickey)» / «Host key verification failed».
 set -euo pipefail
 
-VM_HOST="${VM_HOST:-192.168.2.222}"
+# Адреси ВМ і шлях у приватному Forgejo — поза Git (tools/local-env.sh).
+. "$(dirname "$0")/local-env.sh"
+wr_load_local_env
+wr_require VM_HOST OLD_SSH_HOST NEW_SSH_HOST REPO_PATH || exit 1
+
 VM_USER="${VM_USER:-ubuntu}"
-OLD_SSH_HOST="${OLD_SSH_HOST:-192.168.2.112}"
-NEW_SSH_HOST="${NEW_SSH_HOST:-192.168.2.104}"
 REPO_DIR="${REPO_DIR:-/opt/wallet-tracker}"
-REPO_PATH="vitalii/wallet-tracker.git"
 SSH_PORT="${SSH_PORT:-2222}"
 KEY_NAME="${KEY_NAME:-wallet_tracker_gitea}"
 

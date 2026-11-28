@@ -1,14 +1,18 @@
 #!/bin/bash
-# Наглядач: чекає, поки ВМ 192.168.2.222 підніметься, і один раз запускає
+# Наглядач: чекає, поки ВМ (VM_HOST) підніметься, і один раз запускає
 # tools/fix-remote-after-ip-change.sh — щоб remote Wallet Radar вказував на
-# актуальну адресу Forgejo (адреса ноутбука змінилась: .112 → .104).
+# актуальну адресу Forgejo (адреса робочої станції змінилась).
 #
 # Журнал: /var/log/wra-fix-remote.log (або stdout systemd-журналу).
 #
 # Ідемпотентний: маркер-файл не дає зробити роботу двічі.
 set -uo pipefail
 
-VM_HOST="${VM_HOST:-192.168.2.222}"
+# Адреса ВМ — поза Git (tools/local-env.sh).
+. "$(dirname "$0")/local-env.sh"
+wr_load_local_env
+wr_require VM_HOST || exit 1
+
 SCRIPT="${SCRIPT:-/root/src/wallet-radar-alerts-bot/tools/fix-remote-after-ip-change.sh}"
 MARKER="${MARKER:-/var/lib/wra-fix-remote.done}"
 TIMEOUT_S="${TIMEOUT_S:-15}"

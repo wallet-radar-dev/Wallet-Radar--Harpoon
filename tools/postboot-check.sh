@@ -3,7 +3,7 @@
 #
 # Набір перевірок:
 #   1. чи це справді НОВЕ завантаження (boot_id відрізняється від попереднього);
-#   2. чи машина отримала ту саму адресу (192.168.2.104) — тобто чи
+#   2. чи машина отримала ту саму адресу, що й раніше (EXPECT_IP) — тобто чи
 #      спрацювала DHCP-резервація;
 #   3. чи резервація досі в реєстрі роутера;
 #   4. чи Forgejo піднявся і віддає репозиторій по SSH (плюс реальний клон);
@@ -15,15 +15,24 @@
 # (PASS/FAIL) — у /var/lib/wra-postboot-check.result.
 set -uo pipefail
 
-LOG="/var/log/wra-postboot-check.log"
-RESULT="/var/lib/wra-postboot-check.result"
-PREV_BOOT_ID_FILE="/var/lib/wra-preboot-id"
-EXPECT_IP="${EXPECT_IP:-192.168.2.104}"
-ROUTER="${ROUTER:-192.168.2.1}"
-REPO="vitalii/wallet-radar-alerts-bot"
-SSH_URL="ssh://git@${EXPECT_IP}:2222/${REPO}.git"
-API_URL="http://127.0.0.1:3030"
-WR_URL="http://127.0.0.1:3000"
+# Локальні значення (адреса цієї машини, роутер, шлях у приватному Forgejo)
+# тримаються поза Git — див. tools/local-env.sh.
+. "$(dirname "$0")/local-env.sh"
+wr_load_local_env
+wr_require EXPECT_IP ROUTER REPO || exit 1
+
+LOG="${WR_PBC_LOG:-/var/log/wra-postboot-check.log}"
+RESULT="${WR_PBC_RESULT:-/var/lib/wra-postboot-check.result}"
+PREV_BOOT_ID_FILE="${WR_PBC_PREV_BOOT_ID:-/var/lib/wra-preboot-id}"
+# 0 — не пушити звіт у Forgejo (для пробного запуску без побічних ефектів).
+REPORT_PUSH="${WR_PBC_REPORT_PUSH:-1}"
+IFACE="${IFACE:-$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5; exit}')}"
+FORGEJO_OWNER="${REPO%%/*}"
+REPO_NAME="${REPO##*/}"
+SSH_PORT="${SSH_PORT:-2222}"
+SSH_URL="ssh://git@${EXPECT_IP}:${SSH_PORT}/${REPO}.git"
+API_URL="${FORGEJO_API_URL:-http://127.0.0.1:3030}"
+WR_URL="${WR_URL:-http://127.0.0.1:3000}"
 
 fail=0
 : > "$RESULT"
@@ -58,7 +67,7 @@ echo "boot_id=$boot_id" >> "$RESULT"
 # ── 2. адреса (з очікуванням: Wi-Fi/DHCP піднімаються не миттєво) ───────────
 ip4=""
 for _ in $(seq 1 30); do
-    ip4=$(ip -4 addr show wlp0s20f3 2>/dev/null | grep -oE 'inet [0-9.]+' | cut -d' ' -f2 | head -1)
+    ip4=$(ip -4 addr show "$IFACE" 2>/dev/null | grep -oE 'inet [0-9.]+' | cut -d' ' -f2 | head -1)
     [ -n "$ip4" ] && break
     sleep 4
 done
@@ -131,7 +140,7 @@ rm -rf "$tmpdir"
 
 # Репозиторій приватний, тож API без токена віддає 404 — це очікувано,
 # а не помилка. Справжню перевірку робить SSH-клон вище.
-api=$(curl -s -m 10 "${API_URL}/api/v1/repos/vitalii/${REPO}" 2>/dev/null)
+api=$(curl -s -m 10 "${API_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO_NAME}" 2>/dev/null)
 if echo "$api" | grep -q '"full_name"'; then
     log "OK  API репозиторію: $(echo "$api" | grep -oE '"full_name":"[^"]+"')"
 else
@@ -217,6 +226,12 @@ fi
 # звітів беремо з віддаленого репозиторію, щоб push був fast-forward.
 REPORT_BRANCH="postboot-report"
 REPORT_DIR="$(mktemp -d)"
+if [ "$REPORT_PUSH" != "1" ]; then
+    log "OK  пуш звіту в Forgejo вимкнено (WR_PBC_REPORT_PUSH=$REPORT_PUSH)"
+    rm -rf "$REPORT_DIR"
+    log "=== автотест завершено ==="
+    exit 0
+fi
 if timeout 180 git clone --quiet "$SSH_URL" "$REPORT_DIR/r" >/dev/null 2>&1; then
     if git -C "$REPORT_DIR/r" rev-parse --verify --quiet "origin/${REPORT_BRANCH}" >/dev/null 2>&1; then
         git -C "$REPORT_DIR/r" checkout -q -B "$REPORT_BRANCH" "origin/${REPORT_BRANCH}"

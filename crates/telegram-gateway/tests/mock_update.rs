@@ -11,7 +11,7 @@
 
 use teloxide::types::Update;
 
-const MOCK_UPDATE: &str = r#"{"update_id":9001,"message":{"message_id":9001,"date":1700000000,"chat":{"id":424243,"type":"private"},"from":{"id":424243,"is_bot":false,"first_name":"Smoke","username":"vitalii_vedana"},"text":"/health"}}"#;
+const MOCK_UPDATE: &str = r#"{"update_id":9001,"message":{"message_id":9001,"date":1700000000,"chat":{"id":424243,"type":"private"},"from":{"id":424243,"is_bot":false,"first_name":"Smoke","username":"smoke_admin"},"text":"/health"}}"#;
 
 #[test]
 fn mock_update_parses() {
@@ -23,7 +23,7 @@ fn mock_update_parses() {
             assert_eq!(m.chat.id.0, 424243);
             assert_eq!(
                 m.from.as_ref().and_then(|f| f.username.clone()).as_deref(),
-                Some("vitalii_vedana")
+                Some("smoke_admin")
             );
         }
         other => panic!("очікували Message, отримали {other:?}"),

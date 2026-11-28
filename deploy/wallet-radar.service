@@ -1,6 +1,6 @@
 [Unit]
 Description=Wallet Radar — multi-chain wallet tracker (Node backend + workers)
-Documentation=https://127.0.0.1:3030/vitalii/wallet-tracker
+Documentation=file:///opt/wallet-tracker/README.md
 # Воркери на старті одразу лізуть у мережу (CoinGecko, Blockscout, DefiLlama), тож чекаємо
 # не просто підняття мережевого стеку, а реальної готовності маршрутів.
 After=network-online.target

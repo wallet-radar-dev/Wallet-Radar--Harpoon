@@ -267,14 +267,14 @@ mod tests {
     fn updates() -> Value {
         json!({"result": [
             {"message": {"from": {"username": "Someone"}, "chat": {"id": 111}}},
-            {"message": {"from": {"username": "Vitalii_Vedana"}, "chat": {"id": 222}}},
+            {"message": {"from": {"username": "Smoke_Admin"}, "chat": {"id": 222}}},
             {"edited_message": {"from": {"username": "Later"}, "chat": {"id": 333}}},
         ]})
     }
 
     #[test]
     fn the_configured_user_wins_regardless_of_who_messaged_last() {
-        assert_eq!(pick_chat(&updates(), "vitalii_vedana").as_deref(), Some("222"));
+        assert_eq!(pick_chat(&updates(), "smoke_admin").as_deref(), Some("222"));
     }
 
     #[test]
