@@ -82,8 +82,8 @@ The bot modifies nothing here. Its code lives in this tree (`crates/*`,
   - this repository (merged via PR #13 from the branch
     [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
     — the public copy;
-  - the private repository `vitalii/wallet-radar-alerts-bot` in our Forgejo
-    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — the
+  - the private repository `wallet-radar-alerts-bot` in our Forgejo
+    (`ssh://<forgejo-host>:<port>/<owner>/wallet-radar-alerts-bot.git`) — the
     working copy.
 - **Why it is separate:** the old in-tree poller (`botd`) was removed in
   `e2e777a` — two bots sharing one Telegram token were the source of 409
@@ -390,8 +390,8 @@ REST + WebSocket** (`/api/signals`, `/api/events`, `/api/meta-subnets`).
   - у цьому репозиторії (злито через PR #13 з гілки
     [`feat/telegram-alerts-bot`](https://github.com/wallet-radar-dev/Wallet-Radar--Harpoon/tree/feat/telegram-alerts-bot))
     — публічна копія;
-  - у приватному репозиторії `vitalii/wallet-radar-alerts-bot` нашого Forgejo
-    (`ssh://192.168.2.104:2222/vitalii/wallet-radar-alerts-bot.git`) — робоча
+  - у приватному репозиторії `wallet-radar-alerts-bot` нашого Forgejo
+    (`ssh://<forgejo-host>:<port>/<owner>/wallet-radar-alerts-bot.git`) — робоча
     копія.
 - **Чому окремо:** старий полер у дереві (`botd`) прибрано в `e2e777a` — два
   боти з одним токеном Telegram і були джерелом конфліктів полерів (409). Новий
